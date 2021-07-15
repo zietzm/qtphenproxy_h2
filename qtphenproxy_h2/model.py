@@ -21,28 +21,52 @@ def mse_loss(output, target):
 
 
 class PhenotypeFit(torch.nn.Module):
-    def __init__(self, input_dim, output_dim, heritability_weight=0, mse_weight=1,
-                 genetic_covariance=None, phenotypic_covariance=None,
-                 genetic_covariance_vector=None, phenotypic_covariance_vector=None):
+    def __init__(self, input_dim, output_dim=1, mse_weight=1, heritability_weight=0,
+                 feature_genetic_covariance=None, feature_phenotypic_covariance=None,
+                 target_genetic_covariance=None, target_phenotypic_covariance=None):
+        """
+        Heritability-weighted QTPhenProxy model class. Used to fit a model with
+        a single hyperparameter setting. The heritability weight refers to the
+        loss function weight applied to the heritability of the predictions.
+
+        Parameters
+        ----------
+        input_dim : int
+            Number of feature traits
+        output_dim : int
+            Number of target traits, by default 1
+        mse_weight : float, optional
+            Weight applied to the MSE term of the loss function, by default 1
+        heritability_weight : float, optional
+            Weight applied to the heritability term of the loss function, by default 0
+        feature_genetic_covariance : torch.tensor, optional
+            [description], by default None
+        feature_phenotypic_covariance : torch.tensor, optional
+            [description], by default None
+        target_genetic_covariance : torch.tensor, optional
+            [description], by default None
+        target_phenotypic_covariance : torch.tensor, optional
+            [description], by default None
+        """
         super(PhenotypeFit, self).__init__()
         self.linear = torch.nn.Linear(input_dim, output_dim)
 
         # Information stored for use in the loss function
         self.h2_weight = heritability_weight
         self.mse_weight = mse_weight
-        self.g_cov = genetic_covariance
-        self.p_cov = phenotypic_covariance
-        self.g_cov_vec = genetic_covariance_vector
-        self.p_cov_vec = phenotypic_covariance_vector
+        self.feature_g_cov = feature_genetic_covariance
+        self.feature_p_cov = feature_phenotypic_covariance
+        self.target_g_cov = target_genetic_covariance
+        self.target_p_cov = target_phenotypic_covariance
 
     def forward(self, x):
         return self.linear(x)
 
     def heritability(self):
-        return heritability_fn(self.linear.weight, self.g_cov, self.p_cov)
+        return heritability_fn(self.linear.weight, self.feature_g_cov, self.feature_p_cov)
 
     def coheritability(self):
-        return coheritability_fn(self.linear.weight, self.g_cov_vec, self.p_cov_vec)
+        return coheritability_fn(self.linear.weight, self.target_g_cov, self.target_p_cov)
 
     def loss_fn(self, output, target):
         return self.mse_weight * mse_loss(output, target) - self.h2_weight * self.heritability()
@@ -83,6 +107,27 @@ class MultiHeritabilityQTPhenProxy:
     def __init__(self, X, y, h2_target,
                  feature_genetic_covariance, feature_phenotypic_covariance,
                  target_genetic_covariance, target_phenotypic_covariance):
+        """
+        Heritability weighted QTPhenProxy model fitter. This class fits multiple
+        models to find a good value for the heritability weight hyperparameter.
+
+        Parameters
+        ----------
+        X : torch.tensor
+            Feature phenotype values (n_samples x n_features)
+        y : torch.tensor
+            Target phenotype values (n_samples x 1)
+        h2_target : float
+            Heritability of the target phenotype, for hyperparameter optimization.
+        feature_genetic_covariance : torch.tensor
+            Matrix of genetic covariances for the feature traits. (n_features x n_features)
+        feature_phenotypic_covariance : torch.tensor
+            Matrix of phenotypic covariances for the feature traits. (n_features x n_features)
+        target_genetic_covariance : torch.tensor
+            Vector of genetic covariances between the feature and target traits. (n_features x 1)
+        target_phenotypic_covariance : torch.tensor
+            Vector of phenotypic covariances between the feature and target traits. (n_features x 1)
+        """
         self.X = X
         self.y = y
         self.h2_target = h2_target
@@ -153,9 +198,9 @@ class MultiHeritabilityQTPhenProxy:
         self.setting_to_prediction = dict()
         for setting in iterator:
             model = PhenotypeFit(
-                input_dim=self.X.shape[1], output_dim=1, heritability_weight=setting['heritability_weight'],
-                mse_weight=1, genetic_covariance=self.feature_g_cov, phenotypic_covariance=self.feature_p_cov,
-                genetic_covariance_vector=self.target_g_cov, phenotypic_covariance_vector=self.target_p_cov
+                input_dim=self.X.shape[1], output_dim=1, mse_weight=1, heritability_weight=setting['heritability_weight'],
+                feature_genetic_covariance=self.feature_g_cov, feature_phenotypic_covariance=self.feature_p_cov,
+                target_genetic_covariance=self.target_g_cov, target_phenotypic_covariance=self.target_p_cov
             )
             # Train the model
             model.fit(X=self.X, y=self.y, n_iter=n_iter, learning_rate=setting['learning_rate'], seed=setting['seed'],
