@@ -40,16 +40,16 @@ class PhenotypeFit(torch.nn.Module):
         heritability_weight : float, optional
             Weight applied to the heritability term of the loss function, by default 0
         feature_genetic_covariance : torch.tensor, optional
-            [description], by default None
+            Matrix of genetic covariances for the feature traits, (n_features x n_features), by default None
         feature_phenotypic_covariance : torch.tensor, optional
-            [description], by default None
+            Matrix of phenotypic covariances for the feature traits, (n_features x n_features), by default None
         target_genetic_covariance : torch.tensor, optional
-            [description], by default None
+            Vector of genetic covariances between the feature and target traits, (n_features x 1), by default None
         target_phenotypic_covariance : torch.tensor, optional
-            [description], by default None
+            Vector of phenotypic covariances between the feature and target traits, (n_features x 1), by default None
         """
         super(PhenotypeFit, self).__init__()
-        self.linear = torch.nn.Linear(input_dim, output_dim)
+        self.linear = torch.nn.Linear(input_dim, output_dim, bias=True)
 
         # Information stored for use in the loss function
         self.h2_weight = heritability_weight
@@ -63,9 +63,11 @@ class PhenotypeFit(torch.nn.Module):
         return self.linear(x)
 
     def heritability(self):
+        """Compute the heritability of the fitted trait"""
         return heritability_fn(self.linear.weight, self.feature_g_cov, self.feature_p_cov)
 
     def coheritability(self):
+        """Compute the coheritability between the fitted and target traits"""
         return coheritability_fn(self.linear.weight, self.target_g_cov, self.target_p_cov)
 
     def loss_fn(self, output, target):
@@ -135,8 +137,9 @@ class MultiHeritabilityQTPhenProxy:
         self.feature_p_cov = feature_phenotypic_covariance
         self.target_g_cov = target_genetic_covariance
         self.target_p_cov = target_phenotypic_covariance
+        self.is_trained = False
         self.log_df = None
-        self.setting_to_prediction = None
+        self.setting_to_params = None
 
     def qt_metric(self, weights):
         """
@@ -195,7 +198,7 @@ class MultiHeritabilityQTPhenProxy:
         else:
             iterator = train_settings
 
-        self.setting_to_prediction = dict()
+        self.setting_to_params = dict()
         for setting in iterator:
             model = PhenotypeFit(
                 input_dim=self.X.shape[1], output_dim=1, mse_weight=1, heritability_weight=setting['heritability_weight'],
@@ -206,13 +209,13 @@ class MultiHeritabilityQTPhenProxy:
             model.fit(X=self.X, y=self.y, n_iter=n_iter, learning_rate=setting['learning_rate'], seed=setting['seed'],
                       verbose=verbose)
 
-            # Gather predictions
-            output = model(self.X)
-            self.setting_to_prediction[(setting['heritability_weight'], setting['seed'])] = output
+            # Gather model weights
+            self.setting_to_params[(setting['heritability_weight'], setting['seed'])] = model.linear.parameters()
 
             # Compute the metric for hyperparameter optimization
             setting['qt_metric'] = self.qt_metric(model.linear.weight)
 
+        self.is_trained = True
         self.log_df = pd.DataFrame(train_settings)
 
         best_setting = (
@@ -220,5 +223,13 @@ class MultiHeritabilityQTPhenProxy:
             .loc[self.log_df['qt_metric'] == self.log_df['qt_metric'].min()]
             .to_dict('records')[0]
         )
-        best_predictions = self.setting_to_prediction[(best_setting['heritability_weight'], best_setting['seed'])]
-        return best_predictions
+        return (best_setting['heritability_weight'], best_setting['seed'])
+
+    def get_predictions(self, heritability_weight, seed):
+        """Generate predicted values for all samples for a given train setting"""
+        if not self.is_trained:
+            raise ValueError("The models must be trained before predictions can be generated.")
+        parameters = self.setting_to_params[(heritability_weight, seed)]
+        model = torch.nn.Linear(in_features=self.X.shape[1], out_features=1, bias=True)
+        model.weight, model.bias = tuple(parameters)
+        return model(self.X)
