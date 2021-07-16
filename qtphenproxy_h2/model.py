@@ -1,3 +1,5 @@
+import pathlib
+
 import numpy as np
 import pandas as pd
 import torch
@@ -176,11 +178,6 @@ class MultiHeritabilityQTPhenProxy:
         learning_rate : float
         verbose : bool, optional
             Whether to print a progress bar and track training performance, by default False
-
-        Returns
-        -------
-        torch.tensor
-            Individual QTPhenProxy predictions from the best model fit
         """
         train_settings = [
             {
@@ -210,7 +207,7 @@ class MultiHeritabilityQTPhenProxy:
                       verbose=verbose)
 
             # Gather model weights
-            self.setting_to_params[(setting['heritability_weight'], setting['seed'])] = model.linear.parameters()
+            self.setting_to_params[(setting['heritability_weight'], setting['seed'])] = tuple(model.linear.parameters())
 
             # Compute the metric for hyperparameter optimization
             setting['qt_metric'] = self.qt_metric(model.linear.weight)
@@ -218,6 +215,10 @@ class MultiHeritabilityQTPhenProxy:
         self.is_trained = True
         self.log_df = pd.DataFrame(train_settings)
 
+    def get_best_setting(self):
+        """Return the hyperparameter setting that optimized the QT metric"""
+        if not self.is_trained:
+            raise ValueError("The models must be trained before predictions can be generated.")
         best_setting = (
             self.log_df
             .loc[self.log_df['qt_metric'] == self.log_df['qt_metric'].min()]
@@ -231,5 +232,20 @@ class MultiHeritabilityQTPhenProxy:
             raise ValueError("The models must be trained before predictions can be generated.")
         parameters = self.setting_to_params[(heritability_weight, seed)]
         model = torch.nn.Linear(in_features=self.X.shape[1], out_features=1, bias=True)
-        model.weight, model.bias = tuple(parameters)
+        model.weight, model.bias = parameters
         return model(self.X)
+
+    def save_fit(self, path, feature_names=None):
+        """Save a model into a new directory"""
+        path = pathlib.Path(path)
+        path.mkdir(exist_ok=False)
+        self.log_df.to_csv(path.joinpath('train_log.tsv'), sep='\t', index=False)
+
+        # Flatten {(int, int): (torch.tensor, torch.tensor)} to a [float, int, float, ..., float]
+        settings_parameters = [(*key, *wt.detach().flatten().tolist(), intercept.item()) for key, (wt, intercept) in self.setting_to_params.items()]
+
+        if feature_names is None:
+            feature_names = (f'feature_{i}' for i in range(self.X.shape[1]))
+        colnames = ['heritability_weight', 'seed', *feature_names, 'intercept']
+        settings_parameters_df = pd.DataFrame(settings_parameters, columns=colnames)
+        settings_parameters_df.to_csv(path.joinpath('parameter_values.tsv.gz'), sep='\t', index=False, compression='gzip')
