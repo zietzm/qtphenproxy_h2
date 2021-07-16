@@ -61,6 +61,8 @@ class PhenotypeFit(torch.nn.Module):
         self.target_g_cov = target_genetic_covariance
         self.target_p_cov = target_phenotypic_covariance
 
+        self.train_log_df = None
+
     def forward(self, x):
         return self.linear(x)
 
@@ -75,7 +77,7 @@ class PhenotypeFit(torch.nn.Module):
     def loss_fn(self, output, target):
         return self.mse_weight * mse_loss(output, target) - self.h2_weight * self.heritability()
 
-    def fit(self, X, y, n_iter, learning_rate, seed, verbose=False):
+    def fit(self, X, y, n_iter, learning_rate, seed, verbose=False, log_freq=100):
         """
         Fit the specified QTPhenProxy model
 
@@ -93,7 +95,11 @@ class PhenotypeFit(torch.nn.Module):
             Random seed for training
         verbose : bool, optional
             Whether to print loss every 1000 training steps, by default False
+        log_freq : int, optional
+            How many steps should pass before the training loss is logged
         """
+        train_log = list()
+
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
         torch.manual_seed(seed)
         for step in range(n_iter):
@@ -103,8 +109,12 @@ class PhenotypeFit(torch.nn.Module):
             loss.backward()
             optimizer.step()
 
+            if step % log_freq == 0:
+                train_log.append([step, loss.item()])
+
             if verbose and step % 1000 == 0:
                 print(f'Training loss: {loss.item():.3f}')
+        self.train_log_df = pd.DataFrame(train_log, columns=['step', 'loss'])
 
 
 class MultiHeritabilityQTPhenProxy:
@@ -141,6 +151,7 @@ class MultiHeritabilityQTPhenProxy:
         self.target_p_cov = target_phenotypic_covariance
         self.is_trained = False
         self.log_df = None
+        self.train_log_df = None
         self.setting_to_params = None
 
     def qt_metric(self, weights):
@@ -163,7 +174,7 @@ class MultiHeritabilityQTPhenProxy:
         term_2 = np.abs(1 - h2)
         return term_1 + term_2
 
-    def fit(self, heritability_weights, n_seeds, n_iter, learning_rate, verbose=False):
+    def fit(self, heritability_weights, n_seeds, n_iter, learning_rate, verbose=False, log_freq=100):
         """
         Fit a heritability-weighted QTPhenProxy model of a trait.
 
@@ -178,6 +189,8 @@ class MultiHeritabilityQTPhenProxy:
         learning_rate : float
         verbose : bool, optional
             Whether to print a progress bar and track training performance, by default False
+        log_freq : int, optional
+            How many steps should pass before the training loss is logged
         """
         train_settings = [
             {
@@ -196,21 +209,30 @@ class MultiHeritabilityQTPhenProxy:
             iterator = train_settings
 
         self.setting_to_params = dict()
+        self.train_log_df = pd.DataFrame()
         for setting in iterator:
             model = PhenotypeFit(
-                input_dim=self.X.shape[1], output_dim=1, mse_weight=1, heritability_weight=setting['heritability_weight'],
-                feature_genetic_covariance=self.feature_g_cov, feature_phenotypic_covariance=self.feature_p_cov,
-                target_genetic_covariance=self.target_g_cov, target_phenotypic_covariance=self.target_p_cov
+                input_dim=self.X.shape[1], output_dim=1, mse_weight=1,
+                heritability_weight=setting['heritability_weight'], feature_genetic_covariance=self.feature_g_cov,
+                feature_phenotypic_covariance=self.feature_p_cov, target_genetic_covariance=self.target_g_cov,
+                target_phenotypic_covariance=self.target_p_cov
             )
             # Train the model
             model.fit(X=self.X, y=self.y, n_iter=n_iter, learning_rate=setting['learning_rate'], seed=setting['seed'],
-                      verbose=verbose)
+                      verbose=verbose, log_freq=log_freq)
 
             # Gather model weights
-            self.setting_to_params[(setting['heritability_weight'], setting['seed'])] = tuple(model.linear.parameters())
+            self.setting_to_params[(setting['heritability_weight'], setting['seed'],
+                                    n_iter, setting['learning_rate'])] = tuple(model.linear.parameters())
 
             # Compute the metric for hyperparameter optimization
             setting['qt_metric'] = self.qt_metric(model.linear.weight)
+
+            # Collect training information
+            model_train_df = model.train_log_df.assign(seed=setting['seed'],
+                heritability_weight=setting['heritability_weight'], n_iter=n_iter,
+                learning_rate=setting['learning_rate'])
+            self.train_log_df = pd.concat([self.train_log_df, model_train_df])
 
         self.is_trained = True
         self.log_df = pd.DataFrame(train_settings)
@@ -224,13 +246,14 @@ class MultiHeritabilityQTPhenProxy:
             .loc[self.log_df['qt_metric'] == self.log_df['qt_metric'].min()]
             .to_dict('records')[0]
         )
-        return (best_setting['heritability_weight'], best_setting['seed'])
+        return (best_setting['heritability_weight'], best_setting['seed'],
+                best_setting['n_iter'], best_setting['learning_rate'])
 
-    def get_predictions(self, heritability_weight, seed):
+    def get_predictions(self, heritability_weight, seed, n_iter, learning_rate):
         """Generate predicted values for all samples for a given train setting"""
         if not self.is_trained:
             raise ValueError("The models must be trained before predictions can be generated.")
-        parameters = self.setting_to_params[(heritability_weight, seed)]
+        parameters = self.setting_to_params[(heritability_weight, seed, n_iter, learning_rate)]
         model = torch.nn.Linear(in_features=self.X.shape[1], out_features=1, bias=True)
         model.weight, model.bias = parameters
         return model(self.X)
@@ -239,13 +262,21 @@ class MultiHeritabilityQTPhenProxy:
         """Save a model into a new directory"""
         path = pathlib.Path(path)
         path.mkdir(exist_ok=False)
-        self.log_df.to_csv(path.joinpath('train_log.tsv'), sep='\t', index=False)
 
+        # Save the data used for hyperparameter optimization
+        self.log_df.to_csv(path.joinpath('hyperparameter_log.tsv'), sep='\t', index=False)
+
+        # Save the actual trained parameter values
         # Flatten {(int, int): (torch.tensor, torch.tensor)} to a [float, int, float, ..., float]
-        settings_parameters = [(*key, *wt.detach().flatten().tolist(), intercept.item()) for key, (wt, intercept) in self.setting_to_params.items()]
+        settings_parameters = [(*key, *wt.detach().flatten().tolist(), intercept.item())
+                               for key, (wt, intercept) in self.setting_to_params.items()]
 
         if feature_names is None:
             feature_names = (f'feature_{i}' for i in range(self.X.shape[1]))
-        colnames = ['heritability_weight', 'seed', *feature_names, 'intercept']
+        colnames = ['heritability_weight', 'seed', 'n_iter', 'learning_rate', *feature_names, 'intercept']
         settings_parameters_df = pd.DataFrame(settings_parameters, columns=colnames)
-        settings_parameters_df.to_csv(path.joinpath('parameter_values.tsv.gz'), sep='\t', index=False, compression='gzip')
+        settings_parameters_df.to_csv(path.joinpath('parameter_values.tsv.gz'), sep='\t',
+                                      index=False, compression='gzip')
+
+        # Save the train log data
+        self.train_log_df.to_csv(path.joinpath('training_log.tsv.gz'), sep='\t', index=False, compression='gzip')
