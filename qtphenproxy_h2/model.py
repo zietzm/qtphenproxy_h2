@@ -105,7 +105,7 @@ class PhenotypeFit(torch.nn.Module):
         for step in range(n_iter):
             optimizer.zero_grad()
             outputs = self.forward(X)
-            loss = self.loss_fn(outputs, y)
+            loss = self.loss_fn(outputs, y, self.linear.weight)
             loss.backward()
             optimizer.step()
 
