@@ -66,16 +66,16 @@ class PhenotypeFit(torch.nn.Module):
     def forward(self, x):
         return self.linear(x)
 
-    def heritability(self):
+    def heritability(self, weights):
         """Compute the heritability of the fitted trait"""
-        return heritability_fn(self.linear.weight, self.feature_g_cov, self.feature_p_cov)
+        return heritability_fn(weights, self.feature_g_cov, self.feature_p_cov)
 
-    def coheritability(self):
+    def coheritability(self, weights):
         """Compute the coheritability between the fitted and target traits"""
-        return coheritability_fn(self.linear.weight, self.target_g_cov, self.target_p_cov)
+        return coheritability_fn(weights, self.target_g_cov, self.target_p_cov)
 
-    def loss_fn(self, output, target):
-        return self.mse_weight * mse_loss(output, target) - self.h2_weight * self.heritability()
+    def loss_fn(self, output, target, weights):
+        return self.mse_weight * mse_loss(output, target) - self.h2_weight * self.heritability(weights)
 
     def fit(self, X, y, n_iter, learning_rate, seed, verbose=False, log_freq=100):
         """
