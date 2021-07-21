@@ -1,3 +1,4 @@
+from os import nice
 import pathlib
 
 import numpy as np
@@ -265,174 +266,14 @@ class MultiFitter:
         self.train_log_df.to_csv(path.joinpath('training_log.tsv.gz'), sep='\t', index=False, compression='gzip')
 
 
-class MultiHeritabilityQTPhenProxy:
-    """Legacy version"""
-    def __init__(self, X, y, h2_target,
-                 feature_genetic_covariance, feature_phenotypic_covariance,
-                 target_genetic_covariance, target_phenotypic_covariance):
-        """
-        Heritability weighted QTPhenProxy model fitter. This class fits multiple
-        models to find a good value for the heritability weight hyperparameter.
-
-        Parameters
-        ----------
-        X : torch.tensor
-            Feature phenotype values (n_samples x n_features)
-        y : torch.tensor
-            Target phenotype values (n_samples x 1)
-        h2_target : float
-            Heritability of the target phenotype, for hyperparameter optimization.
-        feature_genetic_covariance : torch.tensor
-            Matrix of genetic covariances for the feature traits. (n_features x n_features)
-        feature_phenotypic_covariance : torch.tensor
-            Matrix of phenotypic covariances for the feature traits. (n_features x n_features)
-        target_genetic_covariance : torch.tensor
-            Vector of genetic covariances between the feature and target traits. (n_features x 1)
-        target_phenotypic_covariance : torch.tensor
-            Vector of phenotypic covariances between the feature and target traits. (n_features x 1)
-        """
-        self.X = X
-        self.y = y
-        self.h2_target = h2_target
-        self.feature_g_cov = feature_genetic_covariance
-        self.feature_p_cov = feature_phenotypic_covariance
-        self.target_g_cov = target_genetic_covariance
-        self.target_p_cov = target_phenotypic_covariance
-        self.is_trained = False
-        self.log_df = None
-        self.train_log_df = None
-        self.setting_to_params = None
-
-    def qt_metric(self, weights):
-        """
-        Computes the QTPhenProxy evaluation metric ("QT metric"), which is used for hyperparameter
-        optimization in QTPhenProxy models.
-
-        The metric is minimized when a derived trait is exactly equal to the genetic component of
-        the target trait.
-
-        Let y be the target trait (data). Let ŷ be the derived trait (some function of feature traits).
-        h2(x) is the heritability of trait x, and h2(x, z) is the coheritability of traits x and z.
-
-        |h2(y) — h2(y, ŷ)| + |1 — h2(ŷ)|
-        """
-        ch2 = coheritability_fn(weights, self.target_g_cov, self.target_p_cov).item()
-        term_1 = np.abs(self.h2_target - ch2)
-
-        h2 = heritability_fn(weights, self.feature_g_cov, self.feature_p_cov).item()
-        term_2 = np.abs(1 - h2)
-        return term_1 + term_2
-
-    def fit(self, heritability_weights, n_seeds, n_iter, learning_rate, verbose=False, log_freq=100):
-        """
-        Fit a heritability-weighted QTPhenProxy model of a trait.
-
-        Parameters
-        ----------
-        heritability_weights : iterable of float
-            Heritability weights to try
-        n_seeds : int
-            Number of random seeds to try for each heritability weight
-        n_iter : int
-            Number of training iterations to use
-        learning_rate : float
-        verbose : bool, optional
-            Whether to print a progress bar and track training performance, by default False
-        log_freq : int, optional
-            How many steps should pass before the training loss is logged
-        """
-        train_settings = [
-            {
-                'heritability_weight': wt,
-                'seed': seed,
-                'n_iter': n_iter,
-                'learning_rate': learning_rate,
-                'verbose': verbose
-            }
-            for wt in heritability_weights for seed in range(n_seeds)
-        ]
-
-        if verbose:
-            iterator = tqdm.auto.tqdm(train_settings)
-        else:
-            iterator = train_settings
-
-        self.setting_to_params = dict()
-        self.train_log_df = pd.DataFrame()
-        for setting in iterator:
-            model = PhenotypeFit(
-                input_dim=self.X.shape[1], output_dim=1, mse_weight=1,
-                heritability_weight=setting['heritability_weight'], feature_genetic_covariance=self.feature_g_cov,
-                feature_phenotypic_covariance=self.feature_p_cov, target_genetic_covariance=self.target_g_cov,
-                target_phenotypic_covariance=self.target_p_cov
-            )
-            # Train the model
-            model.fit(X=self.X, y=self.y, n_iter=n_iter, learning_rate=setting['learning_rate'], seed=setting['seed'],
-                      verbose=verbose, log_freq=log_freq)
-
-            # Gather model weights
-            self.setting_to_params[(setting['heritability_weight'], setting['seed'],
-                                    n_iter, setting['learning_rate'])] = tuple(model.linear.parameters())
-
-            # Compute the metric for hyperparameter optimization
-            setting['qt_metric'] = self.qt_metric(model.linear.weight)
-
-            # Collect training information
-            model_train_df = model.train_log_df.assign(seed=setting['seed'],
-                heritability_weight=setting['heritability_weight'], n_iter=n_iter,
-                learning_rate=setting['learning_rate'])
-            self.train_log_df = pd.concat([self.train_log_df, model_train_df])
-
-        self.is_trained = True
-        self.log_df = pd.DataFrame(train_settings)
-
-    def get_best_setting(self):
-        """Return the hyperparameter setting that optimized the QT metric"""
-        if not self.is_trained:
-            raise ValueError("The models must be trained before predictions can be generated.")
-        best_setting = (
-            self.log_df
-            .loc[self.log_df['qt_metric'] == self.log_df['qt_metric'].min()]
-            .to_dict('records')[0]
-        )
-        return (best_setting['heritability_weight'], best_setting['seed'],
-                best_setting['n_iter'], best_setting['learning_rate'])
-
-    def get_predictions(self, heritability_weight, seed, n_iter, learning_rate):
-        """Generate predicted values for all samples for a given train setting"""
-        if not self.is_trained:
-            raise ValueError("The models must be trained before predictions can be generated.")
-        parameters = self.setting_to_params[(heritability_weight, seed, n_iter, learning_rate)]
-        model = torch.nn.Linear(in_features=self.X.shape[1], out_features=1, bias=True)
-        model.weight, model.bias = parameters
-        return model(self.X)
-
-    def save_fit(self, path, feature_names=None):
-        """Save a model into a new directory"""
-        path = pathlib.Path(path)
-        path.mkdir(exist_ok=False)
-
-        # Save the data used for hyperparameter optimization
-        self.log_df.to_csv(path.joinpath('hyperparameter_log.tsv'), sep='\t', index=False)
-
-        # Save the actual trained parameter values
-        # Flatten {(int, int): (torch.tensor, torch.tensor)} to a [float, int, float, ..., float]
-        settings_parameters = [(*key, *wt.detach().flatten().tolist(), intercept.item())
-                               for key, (wt, intercept) in self.setting_to_params.items()]
-
-        if feature_names is None:
-            feature_names = (f'feature_{i}' for i in range(self.X.shape[1]))
-        colnames = ['heritability_weight', 'seed', 'n_iter', 'learning_rate', *feature_names, 'intercept']
-        settings_parameters_df = pd.DataFrame(settings_parameters, columns=colnames)
-        settings_parameters_df.to_csv(path.joinpath('parameter_values.tsv.gz'), sep='\t',
-                                      index=False, compression='gzip')
-
-        # Save the train log data
-        self.train_log_df.to_csv(path.joinpath('training_log.tsv.gz'), sep='\t', index=False, compression='gzip')
-
-
 class GradientDescentFitter(MultiFitter):
-    def fit(self, gd_lr=0.1, gd_n_iter=100, seed=0, learning_rate=0.001, n_iter=100, verbose=True, log_freq=100):
+    def __init__(self, X, y, h2_target, feature_genetic_covariance, feature_phenotypic_covariance,
+                 target_genetic_covariance, target_phenotypic_covariance, feature_names=None):
+        super().__init__(X, y, h2_target, feature_genetic_covariance, feature_phenotypic_covariance,
+                         target_genetic_covariance, target_phenotypic_covariance, feature_names=feature_names)
+        self.gradient_descent_log_df = pd.DataFrame()
+
+    def fit_seed(self, gd_lr=0.1, gd_n_iter=100, seed=0, learning_rate=0.001, n_iter=5000, verbose=True, log_freq=100):
         """
         Fit a QTPhenProxy model using gradient descent to optimize the heritability weight hyperparameter
 
@@ -443,7 +284,7 @@ class GradientDescentFitter(MultiFitter):
         gd_n_iter : int, optional
             Number of gradient descent iterations for hyperparameter optimization, by default 100
         seed : int, optional
-            Random seed for training, by default 0
+            Random seed for gradient descent, by default 0
         learning_rate : float, optional
             Learning rate for the heritability-weighted QTPhenProxy model itself, by default 0.001
         n_iter : int, optional
@@ -454,13 +295,13 @@ class GradientDescentFitter(MultiFitter):
             Number of iterations at which to log training information, by default 100
         """
         # Initialize the gradient using the starting weights 0.5 and 1
-        self.fit_single(heritability_weight=0.5, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
+        self.fit_single(heritability_weight=0, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
                         verbose=verbose, log_freq=log_freq)
-        self.fit_single(heritability_weight=1, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
+        self.fit_single(heritability_weight=0.1, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
                         verbose=verbose, log_freq=log_freq)
-        old_y = self.hyperparameter_log_df.loc[(0.5, seed, learning_rate, n_iter)].item()
-        y = self.hyperparameter_log_df.loc[(1, seed, learning_rate, n_iter)].item()
-        grad = (y - old_y) / (0.5)
+        old_y = self.hyperparameter_log_df.loc[(0, seed, learning_rate, n_iter), 'qt_metric'].item()
+        y = self.hyperparameter_log_df.loc[(0.1, seed, learning_rate, n_iter), 'qt_metric'].item()
+        grad = (y - old_y) / (0.1)
         x = 1
 
         log = list()
@@ -476,6 +317,36 @@ class GradientDescentFitter(MultiFitter):
                 break
             self.fit_single(heritability_weight=x, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
                             verbose=verbose, log_freq=log_freq)
-            y = self.hyperparameter_log_df.loc[(x, seed, learning_rate, n_iter)].item()
-            grad = (y - old_y) / (x - old_x)
-        self.gradient_descent_log_df = pd.DataFrame(log, columns=['heritability_weight', 'qt_metric', 'gradient'])
+            y = self.hyperparameter_log_df.loc[(x, seed, learning_rate, n_iter), 'qt_metric'].item()
+            grad = (old_y - y) / (old_x - x)
+        log_df = (
+            pd.DataFrame(log, columns=['heritability_weight', 'qt_metric', 'gradient'])
+            .assign(seed=seed)
+        )
+        self.gradient_descent_log_df = pd.concat([self.gradient_descent_log_df, log_df])
+
+    def fit(self, gd_lr=0.1, gd_n_iter=100, n_seeds=1, learning_rate=0.001, n_iter=5000, verbose=True, log_freq=100):
+        """
+        Fit a QTPhenProxy model using gradient descent to optimize the heritability weight hyperparameter using
+        multiple random seeds
+
+        Parameters
+        ----------
+        gd_lr : float, optional
+            Learning rate for hyperparameter optimization gradient descent, by default 0.1
+        gd_n_iter : int, optional
+            Number of gradient descent iterations for hyperparameter optimization, by default 100
+        n_seeds : int, optional
+            Number of random seed for training hyperparameters, by default 0
+        learning_rate : float, optional
+            Learning rate for the heritability-weighted QTPhenProxy model itself, by default 0.001
+        n_iter : int, optional
+            Number of training iterations for individual QTPhenProxy models, by default 100
+        verbose : bool, optional
+            Whether to print information about training, by default True
+        log_freq : int, optional
+            Number of iterations at which to log training information, by default 100
+        """
+        for seed in range(n_seeds):
+            self.fit_seed(gd_lr=gd_lr, gd_n_iter=gd_n_iter, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
+                          verbose=verbose, log_freq=log_freq)
