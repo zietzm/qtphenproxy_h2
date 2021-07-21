@@ -301,8 +301,8 @@ class GradientDescentFitter(MultiFitter):
                         verbose=verbose, log_freq=log_freq)
         old_y = self.hyperparameter_log_df.loc[(0, seed, learning_rate, n_iter), 'qt_metric'].item()
         y = self.hyperparameter_log_df.loc[(0.1, seed, learning_rate, n_iter), 'qt_metric'].item()
-        grad = (y - old_y) / (0.1)
-        x = 1
+        grad = (old_y - y) / (0.1)
+        x = 0.1
 
         log = list()
         for _ in tqdm.auto.trange(gd_n_iter):
