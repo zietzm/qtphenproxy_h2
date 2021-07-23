@@ -230,13 +230,14 @@ class MultiFitter:
         """Return the hyperparameter setting that optimized the QT metric"""
         best_setting = (
             self.hyperparameter_log_df
+            .reset_index()
             .loc[lambda df: df['qt_metric'] == df['qt_metric'].min()]
             .to_dict('records')[0]
         )
-        return (best_setting['heritability_weight'], best_setting['seed'],
-                best_setting['n_iter'], best_setting['learning_rate'])
+        return (best_setting['heritability_weight'], best_setting['seed'], best_setting['learning_rate'],
+                best_setting['n_iter'])
 
-    def get_predictions(self, heritability_weight, seed, n_iter, learning_rate):
+    def get_predictions(self, heritability_weight, seed, learning_rate, n_iter):
         """Generate predicted values for all samples for a given train setting"""
         parameters = self.parameters_df.loc[(heritability_weight, seed, learning_rate, n_iter)].values
         weights = torch.from_numpy(parameters[:-1]).float()
