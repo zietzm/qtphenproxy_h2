@@ -355,28 +355,6 @@ class GradientDescentFitter(MultiFitter):
 class BinarySearchFitter(MultiFitter):
     def fit(self, min_weight=0, max_weight=5, search_depth=10, seed=0, learning_rate=0.001, n_iter=5000, verbose=False,
             log_freq=100):
-        """
-        Fit using binary search across the specified interval
-
-        Parameters
-        ----------
-        min_weight : int, optional
-            [description], by default 0
-        max_weight : int, optional
-            [description], by default 5
-        search_depth : int, optional
-            [description], by default 10
-        seed : int, optional
-            [description], by default 0
-        learning_rate : float, optional
-            [description], by default 0.001
-        n_iter : int, optional
-            [description], by default 5000
-        verbose : bool, optional
-            [description], by default False
-        log_freq : int, optional
-            [description], by default 100
-        """
         for _ in tqdm.auto.trange(search_depth):
             x1 = min_weight + (max_weight - min_weight) / 3
             x2 = min_weight + 2 * (max_weight - min_weight) / 3
@@ -413,3 +391,58 @@ class MultiplierFitter(MultiFitter):
         for multiplier in tqdm.auto.tqdm(multipliers):
             self.fit_multiplier(multiplier=multiplier, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
                                 verbose=verbose, log_freq=log_freq)
+
+
+class CombinationFitter(MultiFitter):
+    def fit_single_multiplier(self, multiplier=0.5, seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
+        self.fit_single(heritability_weight=0, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
+                        verbose=verbose, log_freq=log_freq)
+        qt_metric = self.hyperparameter_log_df.loc[(0, seed, learning_rate, n_iter), 'qt_metric'].item()
+        loss = (
+            self.train_log_df
+            .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter', 'step'])
+            .loc[(0, seed, learning_rate, n_iter, (n_iter - 1) - (n_iter - 1) % log_freq)]
+            ['loss']
+            .item()
+        )
+        multiplier_term = max(1 - multiplier, 1e-6)
+        heritability_weight = multiplier * loss / (qt_metric * multiplier_term)
+        assert isinstance(heritability_weight, float)
+        self.fit_single(heritability_weight=heritability_weight, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
+                        verbose=verbose, log_freq=log_freq)
+
+    def fit_binary_search(self, min_weight=0, max_weight=5, search_depth=10, seed=0, learning_rate=0.001, n_iter=5000,
+                          verbose=False, log_freq=100):
+        for _ in tqdm.auto.trange(search_depth):
+            x1 = min_weight + (max_weight - min_weight) / 3
+            x2 = min_weight + 2 * (max_weight - min_weight) / 3
+            self.fit_single(heritability_weight=x1, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
+                            verbose=verbose, log_freq=log_freq)
+            self.fit_single(heritability_weight=x2, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
+                            verbose=verbose, log_freq=log_freq)
+            y1 = self.hyperparameter_log_df.loc[(x1, seed, learning_rate, n_iter), 'qt_metric'].item()
+            y2 = self.hyperparameter_log_df.loc[(x2, seed, learning_rate, n_iter), 'qt_metric'].item()
+            if y1 < y2:
+                max_weight = min_weight + (max_weight - min_weight) / 2
+            else:
+                min_weight = min_weight + (max_weight - min_weight) / 2
+
+    def fit(self, binary_search_depth=10, seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
+        orders_of_magnitude = [1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
+        for multiplier in orders_of_magnitude:
+            self.fit_single_multiplier(multiplier=multiplier, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
+                                       verbose=verbose, log_freq=log_freq)
+
+        best_magnitude = (
+            self.hyperparameter_log_df
+            .reset_index()
+            .loc[lambda df: df['qt_metric'] == df['qt_metric'].min(), 'heritability_weight']
+            .item()
+        )
+        print(best_magnitude)
+        self.fit_binary_search(min_weight=best_magnitude / 10, max_weight=best_magnitude * 10,
+                               search_depth=binary_search_depth, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
+                               verbose=verbose, log_freq=log_freq)
+
+
+
