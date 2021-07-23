@@ -270,7 +270,7 @@ class MultiFitter:
             if person_ids is None:
                 raise ValueError("Person IDs must be given to save predictions to a Plink format file")
             best_settings = self.get_best_setting()
-            predictions = self.get_predictions(*best_settings)
+            predictions = self.get_predictions(*best_settings).detach().numpy()
             plink_df = pd.DataFrame({'fid': person_ids, 'iid': person_ids, 'phenotype': predictions})
             plink_df.to_csv(path.joinpath('predictions.pheno'), sep='\t', index=False, header=False)
 
