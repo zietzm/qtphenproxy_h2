@@ -4,6 +4,7 @@ import pathlib
 import numpy as np
 import pandas as pd
 import torch
+from torch._C import get_num_interop_threads
 import tqdm.auto
 
 
@@ -246,7 +247,7 @@ class MultiFitter:
         model.weights, model.intercept = (weights, intercept)
         return model(self.X)
 
-    def save_fit(self, path, overwrite=False):
+    def save_fit(self, path, person_ids=None, overwrite=False):
         """Save a model into a new directory"""
         path = pathlib.Path(path)
         path.mkdir(exist_ok=overwrite)
@@ -263,6 +264,15 @@ class MultiFitter:
 
         # Save the train log data
         self.train_log_df.to_csv(path.joinpath('training_log.tsv.gz'), sep='\t', index=False, compression='gzip')
+
+        # Save the best model to a plink file
+        if self.hyperparameter_log_df.shape[0] > 0:
+            if person_ids is None:
+                raise ValueError("Person IDs must be given to save predictions to a Plink format file")
+            best_settings = self.get_best_setting()
+            predictions = self.get_predictions(*best_settings)
+            plink_df = pd.DataFrame({'fid': person_ids, 'iid': person_ids, 'phenotype': predictions})
+            plink_df.to_csv(path.joinpath('predictions.pheno'), sep='\t', index=False, header=False)
 
 
 class GradientDescentFitter(MultiFitter):
@@ -386,6 +396,27 @@ class CombinationFitter(MultiFitter):
                 min_weight = min_weight + (max_weight - min_weight) / 2
 
     def fit(self, binary_search_depth=10, seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
+        """
+        Fit the heritability-weighted QTPhenProxy model's hyperparameter using a two-stage method. First, fit models
+        using weights of varying orders-of-magnitude to determine the best order of magnitude for the weight relative
+        to the loss. Second, use binary search to explore that order of magnitude to find an approximate best
+        hyperparameter.
+
+        Parameters
+        ----------
+        binary_search_depth : int, optional
+            Number of binary search iterations for exploring the appropriate order of magnitude, by default 10
+        seed : int, optional
+            Random seed for QTPhenProxy model fitting, by default 0
+        learning_rate : float, optional
+            Learning rate for QTPhenProxy model fitting, by default 0.001
+        n_iter : int, optional
+            Number of training iterations for the QTPhenProxy model, by default 5000
+        verbose : bool, optional
+            Whether to QTPhenProxy model print training information, by default False
+        log_freq : int, optional
+            Number of iterations at which to log QTPhenProxy model training statistics, by default 100
+        """
         orders_of_magnitude = [1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
         for multiplier in orders_of_magnitude:
             self.fit_single_multiplier(multiplier=multiplier, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
@@ -397,7 +428,6 @@ class CombinationFitter(MultiFitter):
             .loc[lambda df: df['qt_metric'] == df['qt_metric'].min(), 'heritability_weight']
             .item()
         )
-        print(best_magnitude)
         self.fit_binary_search(min_weight=best_magnitude / 10, max_weight=best_magnitude * 10,
                                search_depth=binary_search_depth, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
                                verbose=verbose, log_freq=log_freq)
