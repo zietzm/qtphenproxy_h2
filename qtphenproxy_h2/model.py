@@ -270,9 +270,21 @@ class MultiFitter:
             if person_ids is None:
                 raise ValueError("Person IDs must be given to save predictions to a Plink format file")
             best_settings = self.get_best_setting()
+            target = self.y.detach().numpy().flatten()
+            best_wo_h2 = (
+                self.hyperparameter_log_df
+                .reset_index()
+                .query('heritability_weight == 0')
+                .loc[lambda df: df['qt_metric'] == df['qt_metric'].min()]
+                .to_dict('records')[0]
+            )
+            best_wo_h2 = (best_wo_h2['heritability_weight'], best_wo_h2['seed'], best_wo_h2['learning_rate'],
+                          best_wo_h2['n_iter'])
+            no_h2_predictions = self.get_predictions(*best_wo_h2).detach().numpy().flatten()
             predictions = self.get_predictions(*best_settings).detach().numpy().flatten()
-            plink_df = pd.DataFrame({'fid': person_ids, 'iid': person_ids, 'phenotype': predictions})
-            plink_df.to_csv(path.joinpath('predictions.pheno'), sep='\t', index=False, header=False)
+            plink_df = pd.DataFrame({'FID': person_ids, 'IID': person_ids, 'target': target,
+                                     'qtphenproxy': no_h2_predictions, 'qtphenproxy_h2': predictions})
+            plink_df.to_csv(path.joinpath('predictions.pheno'), sep='\t', index=False, header=True)
 
 
 class GradientDescentFitter(MultiFitter):
