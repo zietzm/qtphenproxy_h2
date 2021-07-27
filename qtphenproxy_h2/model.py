@@ -253,7 +253,11 @@ class MultiFitter:
         path.mkdir(exist_ok=overwrite)
 
         # Save the data used for hyperparameter optimization
-        self.hyperparameter_log_df.to_csv(path.joinpath('hyperparameter_log.tsv'), sep='\t', index=False)
+        (
+            self.hyperparameter_log_df
+            .reset_index()
+            .to_csv(path.joinpath('hyperparameter_log.tsv'), sep='\t', index=False)
+        )
 
         # Save the actual trained parameter values
         (
