@@ -3,8 +3,9 @@ import pathlib
 
 import numpy as np
 import pandas as pd
+from pandas.io.formats.style import jinja2
 import torch
-from torch._C import get_num_interop_threads
+from torch._C import get_num_interop_threads, set_num_interop_threads
 import tqdm.auto
 
 
@@ -158,8 +159,38 @@ class MultiFitter:
         )
         self.train_log_df = pd.DataFrame(columns=['heritability_weight', 'seed', 'learning_rate', 'n_iter', 'step',
                                                   'loss'])
-        self.parameters_df = pd.DataFrame()  #  heritability_weight	seed	learning_rate   n_iter
         self.feature_names = feature_names if feature_names is not None else list(range(X.shape[1]))
+        self.parameters_df = (
+            pd.DataFrame(columns=['heritability_weight', 'seed', 'learning_rate', 'n_iter', *self.feature_names,
+                                  'intercept'])
+            .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter'])
+        )
+
+    @classmethod
+    def from_tables(cls, phenotype_code, genetic_covariance_matrix, phenotypic_covariance_matrix, phenotypes_df):
+        target_heritability = genetic_covariance_matrix.loc[phenotype_code, phenotype_code]
+        feature_cols = phenotypes_df.columns.drop(phenotype_code)
+        X = phenotypes_df.loc[:, feature_cols]
+        y = phenotypes_df.loc[:, [phenotype_code]]
+
+        feature_genetic_covariance = genetic_covariance_matrix.loc[feature_cols, feature_cols]
+        feature_phenotypic_covariance = phenotypic_covariance_matrix.loc[feature_cols, feature_cols]
+
+        target_genetic_covariance = genetic_covariance_matrix.loc[feature_cols, [phenotype_code]]
+        target_phenotypic_covariance = phenotypic_covariance_matrix.loc[feature_cols, [phenotype_code]]
+
+        # Convert all to torch tensors
+        X = torch.from_numpy(X.values).float()
+        y = torch.from_numpy(y.values).float()
+        feature_genetic_covariance = torch.from_numpy(feature_genetic_covariance.values).float()
+        feature_phenotypic_covariance = torch.from_numpy(feature_phenotypic_covariance.values).float()
+        target_genetic_covariance = torch.from_numpy(target_genetic_covariance.values).float()
+        target_phenotypic_covariance = torch.from_numpy(target_phenotypic_covariance.values).float()
+
+        return cls(X=X, y=y, h2_target=target_heritability, feature_genetic_covariance=feature_genetic_covariance,
+                   feature_phenotypic_covariance=feature_phenotypic_covariance,
+                   target_genetic_covariance=target_genetic_covariance,
+                   target_phenotypic_covariance=target_phenotypic_covariance, feature_names=feature_cols.tolist())
 
     def qt_metric(self, weights):
         """
@@ -247,7 +278,7 @@ class MultiFitter:
         model.weights, model.intercept = (weights, intercept)
         return model(self.X)
 
-    def save_fit(self, path, person_ids=None, overwrite=False):
+    def save_fit(self, path, person_ids=None, save_raw_data=True, overwrite=False):
         """Save a model into a new directory"""
         path = pathlib.Path(path)
         path.mkdir(exist_ok=overwrite)
@@ -269,6 +300,11 @@ class MultiFitter:
         # Save the train log data
         self.train_log_df.to_csv(path.joinpath('training_log.tsv.gz'), sep='\t', index=False, compression='gzip')
 
+        # Save feature names
+        with open(path.joinpath('feature_names.tsv'), 'w+') as f:
+            names_lines = [str(name) + '\n' for name in self.feature_names]
+            f.writelines(names_lines)
+
         # Save the best model to a plink file
         if self.hyperparameter_log_df.shape[0] > 0:
             if person_ids is None:
@@ -289,6 +325,48 @@ class MultiFitter:
             plink_df = pd.DataFrame({'FID': person_ids, 'IID': person_ids, 'target': target,
                                      'qtphenproxy': no_h2_predictions, 'qtphenproxy_h2': predictions})
             plink_df.to_csv(path.joinpath('predictions.pheno'), sep='\t', index=False, header=True)
+
+        if save_raw_data:
+            raw_folder = path.joinpath('raw/')
+            raw_folder.mkdir(exist_ok=True)
+            torch.save(self.X, raw_folder.joinpath('X.pt'))
+            torch.save(self.y, raw_folder.joinpath('y.pt'))
+
+            torch.save(self.feature_g_cov, raw_folder.joinpath('feature_genetic_covariance.pt'))
+            torch.save(self.feature_p_cov, raw_folder.joinpath('feature_phenotypic_covariance.pt'))
+            torch.save(self.target_g_cov, raw_folder.joinpath('target_genetic_covariance.pt'))
+            torch.save(self.target_p_cov, raw_folder.joinpath('target_phenotypic_covariance.pt'))
+
+            with open(raw_folder.joinpath('h2.txt'), 'w+') as f:
+                f.write(str(self.h2_target))
+                f.write('\n')
+
+    @classmethod
+    def load_fit(cls, path):
+        path = pathlib.Path(path)
+        X = torch.load(path.joinpath('raw/X.pt'))
+        y = torch.load(path.joinpath('raw/y.pt'))
+        feature_g_cov = torch.load(path.joinpath('raw/feature_genetic_covariance.pt'))
+        feature_p_cov = torch.load(path.joinpath('raw/feature_phenotypic_covariance.pt'))
+        target_g_cov = torch.load(path.joinpath('raw/target_genetic_covariance.pt'))
+        target_p_cov = torch.load(path.joinpath('raw/target_phenotypic_covariance.pt'))
+        with open(path.joinpath('raw/h2.txt'), 'r') as f:
+            h2_target = float(f.readline().strip())
+        cl = cls(X=X, y=y, h2_target=h2_target,  feature_genetic_covariance=feature_g_cov,
+                 feature_phenotypic_covariance=feature_p_cov, target_genetic_covariance=target_g_cov,
+                 target_phenotypic_covariance=target_p_cov)
+
+        cl.hyperparameter_log_df = (
+            pd.read_csv(path.joinpath('hyperparameter_log.tsv'), sep='\t')
+            .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter'])
+        )
+        cl.parameters_df = (
+            pd.read_csv(path.joinpath('parameter_values.tsv.gz'), sep='\t')
+            .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter'])
+        )
+        cl.train_log_df = pd.read_csv(path.joinpath('training_log.tsv.gz'), sep='\t')
+        cl.feature_names = pd.read_csv(path.joinpath('feature_names.tsv'), header=None).values.flatten().tolist()
+        return cl
 
 
 class GradientDescentFitter(MultiFitter):
