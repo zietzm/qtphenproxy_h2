@@ -459,7 +459,8 @@ class CombinationFitter(MultiFitter):
     def fit_single_multiplier(self, multiplier=0.5, seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
         self.fit_single(heritability_weight=0, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
                         verbose=verbose, log_freq=log_freq)
-        qt_metric = self.hyperparameter_log_df.loc[(0, seed, learning_rate, n_iter), 'qt_metric'].item()
+        heritability = heritability_fn(self.parameters_df.loc[(0, seed, learning_rate, n_iter)].iloc[:-1].values,
+                                       self.feature_g_cov.detach().numpy(), self.feature_p_cov.detach().numpy())
         loss = (
             self.train_log_df
             .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter', 'step'])
@@ -467,8 +468,7 @@ class CombinationFitter(MultiFitter):
             ['loss']
             .item()
         )
-        multiplier_term = max(1 - multiplier, 1e-6)
-        heritability_weight = multiplier * loss / (qt_metric * multiplier_term)
+        heritability_weight = multiplier * loss / heritability
         assert isinstance(heritability_weight, float)
         self.fit_single(heritability_weight=heritability_weight, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
                         verbose=verbose, log_freq=log_freq)
