@@ -1,11 +1,8 @@
-from os import nice
 import pathlib
 
 import numpy as np
 import pandas as pd
-from pandas.io.formats.style import jinja2
 import torch
-from torch._C import get_num_interop_threads, set_num_interop_threads
 import tqdm.auto
 
 
@@ -168,6 +165,22 @@ class MultiFitter:
 
     @classmethod
     def from_tables(cls, phenotype_code, genetic_covariance_matrix, phenotypic_covariance_matrix, phenotypes_df):
+        """
+        Load a model from a covariance matrices and phenotype data
+
+        Parameters
+        ----------
+        phenotype_code : str
+            Target phenotype of interest.
+        genetic_covariance_matrix : pandas.DataFrame
+            Square pandas.DataFrame whose index and columns contain `phenotype_code` and entries are equal to genetic
+            covariances
+        phenotypic_covariance_matrix : pandas.DataFrame
+            Square pandas.DataFrame whose index and columns contain `phenotype_code` and entries are equal to phenotypic
+            covariances
+        phenotypes_df : pandas.DataFrame
+            People x phenotypes table. Column names are the same as those for genetic and phenotypic covariance matrices
+        """
         target_heritability = genetic_covariance_matrix.loc[phenotype_code, phenotype_code]
         feature_cols = phenotypes_df.columns.drop(phenotype_code)
         X = phenotypes_df.loc[:, feature_cols]
@@ -213,6 +226,24 @@ class MultiFitter:
         return term_1 + term_2
 
     def fit_single(self, heritability_weight=0, seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
+        """
+        Fit a model for a single heritability weight/seed/learning rate/iteration combo
+
+        Parameters
+        ----------
+        heritability_weight : float, optional
+            Weight applied to the heritability term in the model loss function, by default 0
+        seed : int, optional
+            Random seed used for training, by default 0
+        learning_rate : float, optional
+            Learning rate used for training, by default 0.001
+        n_iter : int, optional
+            Number of training iterations, by default 5000
+        verbose : bool, optional
+            Whether to print training loss progress, by default False
+        log_freq : int, optional
+            Number of iterations between logging during training, by default 100
+        """
         if (heritability_weight, seed, learning_rate, n_iter) in self.hyperparameter_log_df.index:
             return
         # Instantiate the model class
@@ -343,6 +374,7 @@ class MultiFitter:
 
     @classmethod
     def load_fit(cls, path):
+        """Load an already fit model from the specified path"""
         path = pathlib.Path(path)
         X = torch.load(path.joinpath('raw/X.pt'))
         y = torch.load(path.joinpath('raw/y.pt'))
@@ -457,6 +489,8 @@ class GradientDescentFitter(MultiFitter):
 
 class CombinationFitter(MultiFitter):
     def fit_single_multiplier(self, multiplier=0.5, seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
+        """Fit a model using a heritability weight, chosen as the relative size of the heritability loss compared to the
+        overall training loss. Weight = multiplier * overall loss / proxy trait heritability"""
         self.fit_single(heritability_weight=0, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
                         verbose=verbose, log_freq=log_freq)
         qt_metric = self.hyperparameter_log_df.loc[(0, seed, learning_rate, n_iter), 'qt_metric'].item()
@@ -475,6 +509,7 @@ class CombinationFitter(MultiFitter):
 
     def fit_binary_search(self, min_weight=0, max_weight=5, search_depth=10, seed=0, learning_rate=0.001, n_iter=5000,
                           verbose=False, log_freq=100):
+        """Use binary search across heritability weights to find an approximate best solution"""
         for _ in tqdm.auto.trange(search_depth):
             x1 = min_weight + (max_weight - min_weight) / 3
             x2 = min_weight + 2 * (max_weight - min_weight) / 3
