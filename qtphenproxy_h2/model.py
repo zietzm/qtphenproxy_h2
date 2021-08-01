@@ -23,7 +23,7 @@ def mse_loss(output, target):
 
 
 class PhenotypeFit(torch.nn.Module):
-    def __init__(self, input_dim, output_dim=1, mse_weight=1, heritability_weight=0,
+    def __init__(self, input_dim, output_dim=1, bce_weight=1, heritability_weight=0,
                  feature_genetic_covariance=None, feature_phenotypic_covariance=None,
                  target_genetic_covariance=None, target_phenotypic_covariance=None):
         """
@@ -37,8 +37,8 @@ class PhenotypeFit(torch.nn.Module):
             Number of feature traits
         output_dim : int
             Number of target traits, by default 1
-        mse_weight : float, optional
-            Weight applied to the MSE term of the loss function, by default 1
+        bce_weight : float, optional
+            Weight applied to the BCE term of the loss function, by default 1
         heritability_weight : float, optional
             Weight applied to the heritability term of the loss function, by default 0
         feature_genetic_covariance : torch.tensor, optional
@@ -55,7 +55,7 @@ class PhenotypeFit(torch.nn.Module):
 
         # Information stored for use in the loss function
         self.h2_weight = heritability_weight
-        self.mse_weight = mse_weight
+        self.bce_weight = bce_weight
         self.feature_g_cov = feature_genetic_covariance
         self.feature_p_cov = feature_phenotypic_covariance
         self.target_g_cov = target_genetic_covariance
@@ -64,7 +64,7 @@ class PhenotypeFit(torch.nn.Module):
         self.train_log_df = None
 
     def forward(self, x):
-        return self.linear(x)
+        return torch.sigmoid(self.linear(x))
 
     def heritability(self, weights):
         """Compute the heritability of the fitted trait"""
@@ -75,7 +75,7 @@ class PhenotypeFit(torch.nn.Module):
         return coheritability_fn(weights, self.target_g_cov, self.target_p_cov)
 
     def loss_fn(self, output, target, weights):
-        return self.mse_weight * mse_loss(output, target) - self.h2_weight * self.heritability(weights)
+        return self.bce_weight * torch.nn.BCELoss()(output, target) - self.h2_weight * self.heritability(weights)
 
     def fit(self, X, y, n_iter, learning_rate, seed, verbose=False, log_freq=100):
         """
@@ -143,8 +143,10 @@ class MultiFitter:
         feature_names : List[string]
             List of names for each feature, in the same order as the features appear, optional
         """
+        n_samples, n_features = X.shape
+
         self.X = X
-        self.y = y
+        self.y = y.view(n_samples, 1)
         self.h2_target = h2_target
         self.feature_g_cov = feature_genetic_covariance
         self.feature_p_cov = feature_phenotypic_covariance
@@ -248,7 +250,7 @@ class MultiFitter:
             return
         # Instantiate the model class
         model = PhenotypeFit(
-            input_dim=self.X.shape[1], output_dim=1, mse_weight=1,
+            input_dim=self.X.shape[1], output_dim=1, bce_weight=1,
             heritability_weight=heritability_weight, feature_genetic_covariance=self.feature_g_cov,
             feature_phenotypic_covariance=self.feature_p_cov, target_genetic_covariance=self.target_g_cov,
             target_phenotypic_covariance=self.target_p_cov
