@@ -548,7 +548,7 @@ class CombinationFitter(MultiFitter):
         log_freq : int, optional
             Number of iterations at which to log QTPhenProxy model training statistics, by default 100
         """
-        orders_of_magnitude = [1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
+        orders_of_magnitude = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
         for multiplier in orders_of_magnitude:
             self.fit_single_multiplier(multiplier=multiplier, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
                                        verbose=verbose, log_freq=log_freq)
