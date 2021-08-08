@@ -57,6 +57,12 @@ class PhenotypeFit(torch.nn.Module):
         super(PhenotypeFit, self).__init__()
         self.linear = torch.nn.Linear(input_dim, output_dim, bias=True)
 
+        # Finding errors due to different floating precisions in pandas index vs tensor. Only use 9 digits of precision
+        heritability_weight = round(heritability_weight, 9)
+        bce_weight = round(bce_weight, 9)
+        l1_weight = round(l1_weight, 9)
+        l2_weight = round(l2_weight, 9)
+
         # Information stored for use in the loss function
         self.h2_weight = heritability_weight
         self.bce_weight = bce_weight
