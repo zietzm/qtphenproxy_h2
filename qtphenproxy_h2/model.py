@@ -545,6 +545,13 @@ class CombinationFitter(MultiFitter):
         for _ in tqdm.auto.trange(search_depth):
             x1 = min_weight + (max_weight - min_weight) / 3
             x2 = min_weight + 2 * (max_weight - min_weight) / 3
+
+            # Fix floating point errors
+            x1 = round(x1, 9)
+            x2 = round(x2, 9)
+            l1_weight = round(l1_weight, 9)
+            l2_weight = round(l2_weight, 9)
+
             self.fit_single(heritability_weight=x1, l1_weight=l1_weight, l2_weight=l2_weight, seed=seed,
                             learning_rate=learning_rate, n_iter=n_iter, verbose=verbose, log_freq=log_freq)
             self.fit_single(heritability_weight=x2, l1_weight=l1_weight, l2_weight=l2_weight, seed=seed,
