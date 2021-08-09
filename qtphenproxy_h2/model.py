@@ -174,7 +174,8 @@ class MultiFitter:
         )
 
     @classmethod
-    def from_tables(cls, phenotype_code, genetic_covariance_matrix, phenotypic_covariance_matrix, phenotypes_df):
+    def from_tables(cls, phenotype_code, genetic_covariance_matrix, phenotypic_covariance_matrix, features_df,
+                    outcomes_df):
         """
         Load a model from a covariance matrices and phenotype data
 
@@ -188,13 +189,17 @@ class MultiFitter:
         phenotypic_covariance_matrix : pandas.DataFrame
             Square pandas.DataFrame whose index and columns contain `phenotype_code` and entries are equal to phenotypic
             covariances
-        phenotypes_df : pandas.DataFrame
-            People x phenotypes table. Column names are the same as those for genetic and phenotypic covariance matrices
+        features_df : pandas.DataFrame
+            People x phenotypes table. Column names are the same as those for genetic and phenotypic covariance
+            matrices. These features are typically standardized phenotype values.
+        outcomes_df : pandas.DataFrame
+            People x phenotypes table. Column names are the same as those for genetic and phenotypic covariance
+            matrices. These outcomes are typically unstandardized phenotype values.
         """
         target_heritability = genetic_covariance_matrix.loc[phenotype_code, phenotype_code]
-        feature_cols = phenotypes_df.columns.drop(phenotype_code)
-        X = phenotypes_df.loc[:, feature_cols]
-        y = phenotypes_df.loc[:, [phenotype_code]]
+        feature_cols = features_df.columns.drop(phenotype_code)
+        X = features_df.loc[:, feature_cols]
+        y = outcomes_df.loc[:, [phenotype_code]]
 
         feature_genetic_covariance = genetic_covariance_matrix.loc[feature_cols, feature_cols]
         feature_phenotypic_covariance = phenotypic_covariance_matrix.loc[feature_cols, feature_cols]
