@@ -81,8 +81,16 @@ class PhenotypeFit(torch.nn.Module):
         return coheritability_fn(weights, self.target_g_cov, self.target_p_cov)
 
     def loss_fn(self, output, target, weights):
-        return self.bce_weight * torch.nn.BCELoss()(output, target) - self.h2_weight * self.heritability(weights) \
-             + self.l1_weight * torch.norm(weights, p=1) + self.l2_weight * torch.norm(weights, p=2)
+        loss = 0
+        if self.bce_weight != 0:
+            loss += self.bce_weight * torch.nn.BCELoss()(output, target)
+        if self.h2_weight != 0:
+            loss -= self.h2_weight * self.heritability(weights)
+        if self.l1_weight != 0:
+            loss += self.l1_weight * torch.norm(weights, p=1)
+        if self.l2_weight != 0:
+            loss += self.l2_weight * torch.norm(weights, p=2)
+        return loss
 
     def fit(self, X, y, n_iter, learning_rate, seed, verbose=False, log_freq=100):
         """
