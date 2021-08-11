@@ -9,8 +9,9 @@ import tqdm.auto
 def heritability_fn(weights, feature_genetic_covariance, feature_phenotypic_covariance):
     """Computes the heritability of a derived trait which is a linear combination of traits
     with known heritabilities and co-heritabilities."""
-    return (weights @ feature_genetic_covariance @ weights.T) / \
-        (weights @ feature_phenotypic_covariance @ weights.T)
+    h2 = (weights @ feature_genetic_covariance @ weights.T) / \
+         (weights @ feature_phenotypic_covariance @ weights.T)
+    return h2[0, 0]
 
 def coheritability_fn(weights, target_genetic_covariance, target_phenotypic_covariance):
     """Computes the coheritability of a trait with a linear combination of other traits with
