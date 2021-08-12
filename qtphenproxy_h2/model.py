@@ -274,9 +274,9 @@ class MultiFitter:
             Number of iterations between logging during training, by default 100
         """
         # Finding errors due to different floating precisions in pandas index vs tensor. Only use 9 digits of precision
-        heritability_weight = round(heritability_weight, 9)
-        l1_weight = round(l1_weight, 9)
-        l2_weight = round(l2_weight, 9)
+        heritability_weight = round(heritability_weight, 15)
+        l1_weight = round(l1_weight, 15)
+        l2_weight = round(l2_weight, 15)
 
         if (heritability_weight, l1_weight, l2_weight, seed, learning_rate, n_iter) in self.hyperparameter_log_df.index:
             return
@@ -488,7 +488,7 @@ class GradientDescentFitter(MultiFitter):
             old_x = x
             old_y = y
             x = old_x - gd_lr * grad
-            x = round(x, ndigits=5)
+            x = round(x, ndigits=15)
             if x == old_x:
                 break
             self.fit_single(heritability_weight=x, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
@@ -561,10 +561,10 @@ class CombinationFitter(MultiFitter):
             x2 = min_weight + 2 * (max_weight - min_weight) / 3
 
             # Fix floating point errors
-            x1 = round(x1, 9)
-            x2 = round(x2, 9)
-            l1_weight = round(l1_weight, 9)
-            l2_weight = round(l2_weight, 9)
+            x1 = round(x1, 15)
+            x2 = round(x2, 15)
+            l1_weight = round(l1_weight, 15)
+            l2_weight = round(l2_weight, 15)
 
             self.fit_single(heritability_weight=x1, l1_weight=l1_weight, l2_weight=l2_weight, seed=seed,
                             learning_rate=learning_rate, n_iter=n_iter, verbose=verbose, log_freq=log_freq)
