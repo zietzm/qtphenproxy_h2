@@ -159,7 +159,7 @@ class MultiFitter:
         feature_names : List[string]
             List of names for each feature, in the same order as the features appear, optional
         """
-        n_samples, n_features = X.shape
+        n_samples, self.n_features = X.shape
 
         self.X = X
         self.y = y.view(n_samples, 1)
@@ -344,10 +344,11 @@ class MultiFitter:
             .loc[(heritability_weight, l1_weight, l2_weight, seed, learning_rate, n_iter)]
             .values
         )
-        weights = torch.from_numpy(parameters[:-1]).float()
-        intercept = torch.tensor((parameters[-1])).float()
+        weights = torch.nn.Parameter(torch.from_numpy(parameters[:-1]).view(1, self.n_features).float())
+        intercept = torch.nn.Parameter(torch.tensor((parameters[-1])).float())
         model = torch.nn.Linear(in_features=self.X.shape[1], out_features=1, bias=True)
-        model.weights, model.intercept = (weights, intercept)
+        model.weight = weights
+        model.bias = intercept
         return torch.sigmoid(model(self.X))
 
     def save_fit(self, path, person_ids=None, save_raw_data=True, overwrite=False):
