@@ -622,6 +622,8 @@ class CombinationFitter(MultiFitter):
             self.hyperparameter_log_df
             .reset_index()
             .query('heritability_weight != 0')
+            .set_index(['l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter'])
+            .loc[(0, 0, 0, 0.01, 5000)]
             .loc[lambda df: df['qt_metric'] == df['qt_metric'].min(), 'heritability_weight']
             .item()
         )
