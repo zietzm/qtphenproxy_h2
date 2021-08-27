@@ -6,13 +6,12 @@ set -e
 # Filter raw BGEN files for the stroke/MI markers
 for i in $(seq 1 22);
 do
-  # In Plink2 we'd use ref-first as the final flag on --bgen
-  plink \
-    --bgen /data1/deep_storage/ukbiobank/imp_bgen_files/ukb_imp_chr${i}_v3.bgen \
+  plink2 \
+    --bgen /data1/deep_storage/ukbiobank/imp_bgen_files/ukb_imp_chr${i}_v3.bgen ref-first \
     --sample /data1/deep_storage/ukbiobank/genotypes/ukb41039_imp_chr${i}_v3_s487320.sample \
     --remove /data1/deep_storage/ukbiobank/withdraw41039_20181016.csv \
     --extract /data1/home/mnz2108/git/qtphenproxy_h2/data/markers/all_markers_plink.txt \
-    --biallelic-only strict \
+    --max-alleles 2 \
     --make-bed \
     --out /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/chr${i}
 done
