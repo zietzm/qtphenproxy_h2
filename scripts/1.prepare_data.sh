@@ -12,23 +12,17 @@ do
     --remove /data1/deep_storage/ukbiobank/withdraw41039_20181016.csv \
     --extract /data1/home/mnz2108/git/qtphenproxy_h2/data/markers/all_markers_plink.txt \
     --max-alleles 2 \
-    --make-bed \
+    --make-pgen \
     --out /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/chr${i}
 done
 
 # Gather a list of files that were actually produced (not all chromosomes have one of the variants)
-ls -1tr /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/*.bed | sed -e 's/\.bed$//' > \
+ls -1tr /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/*.pgen | sed -e 's/\.pgen$//' > \
   /data1/home/mnz2108/git/qtphenproxy_h2/scripts/genotypes_files.txt
 
 # Combine the files into a single genotypes file
-plink \
-  --merge-list /data1/home/mnz2108/git/qtphenproxy_h2/scripts/genotypes_files.txt \
-  --make-bed \
-  --out /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/marker_genotypes
-
-# Convert Plink 1 genotypes file to Plink 2
 plink2 \
-  --bfile /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/marker_genotypes \
+  --pmerge-list /data1/home/mnz2108/git/qtphenproxy_h2/scripts/genotypes_files.txt \
   --make-pgen \
   --out /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/marker_genotypes
 
