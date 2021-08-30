@@ -14,6 +14,16 @@ do
     --max-alleles 2 \
     --make-pgen \
     --out /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/chr${i}
+
+  python /data1/home/mnz2108/git/qtphenproxy_h2/scripts/filter_multiallelic.py \
+    /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/chr${i}.pvar \
+    --output /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/chr${i}_variants_to_keep.txt
+
+  plink2 \
+    --pfile /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/chr${i} \
+    --extract /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/chr${i}_variants_to_keep.txt \
+    --make-pgen \
+    --out /data1/home/mnz2108/git/qtphenproxy_h2/data/genotypes/chr${i}
 done
 
 # Gather a list of files that were actually produced (not all chromosomes have one of the variants)
