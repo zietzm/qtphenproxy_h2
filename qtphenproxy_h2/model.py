@@ -524,7 +524,7 @@ class CombinationFitter(MultiFitter):
             else:
                 min_weight = min_weight + (max_weight - min_weight) / 2
 
-    def fit(self, binary_search_depth=10, seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
+    def fit(self, n_orders_of_magnitude=6, binary_search_depth=10, seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
         """
         Fit the heritability-weighted QTPhenProxy model's hyperparameter using a two-stage method. First, fit models
         using weights of varying orders-of-magnitude to determine the best order of magnitude for the weight relative
@@ -546,7 +546,7 @@ class CombinationFitter(MultiFitter):
         log_freq : int, optional
             Number of iterations at which to log QTPhenProxy model training statistics, by default 100
         """
-        orders_of_magnitude = [1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
+        orders_of_magnitude = 10.0 ** - np.arange(n_orders_of_magnitude)
         for multiplier in orders_of_magnitude:
             self.fit_single_multiplier(multiplier=multiplier, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
                                        verbose=verbose, log_freq=log_freq)
@@ -554,6 +554,7 @@ class CombinationFitter(MultiFitter):
         best_magnitude = (
             self.hyperparameter_log_df
             .reset_index()
+            .query('heritability_weight != 0')
             .loc[lambda df: df['qt_metric'] == df['qt_metric'].min(), 'heritability_weight']
             .item()
         )
