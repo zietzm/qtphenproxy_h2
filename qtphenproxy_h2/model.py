@@ -556,7 +556,7 @@ class CombinationFitter(MultiFitter):
             .reset_index()
             .query('heritability_weight != 0')
             .loc[lambda df: df['qt_metric'] == df['qt_metric'].min(), 'heritability_weight']
-            .item()
+            .max()
         )
         self.fit_binary_search(min_weight=best_magnitude / 10, max_weight=best_magnitude * 10,
                                search_depth=binary_search_depth, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
