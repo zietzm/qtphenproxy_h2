@@ -64,7 +64,7 @@ class PhenotypeFit(torch.nn.Module):
         self.train_log_df = None
 
     def forward(self, x):
-        return self.linear(x)
+        return torch.sigmoid(self.linear(x))
 
     def heritability(self, weights):
         """Compute the heritability of the fitted trait"""
@@ -307,7 +307,7 @@ class MultiFitter:
         intercept = torch.tensor((parameters[-1])).float()
         model = torch.nn.Linear(in_features=self.X.shape[1], out_features=1, bias=True)
         model.weights, model.intercept = (weights, intercept)
-        return model(self.X)
+        return torch.sigmoid(model(self.X))
 
     def save_fit(self, path, person_ids=None, save_raw_data=True, overwrite=False):
         """Save a model into a new directory"""
