@@ -620,12 +620,11 @@ class CombinationFitter(MultiFitter):
 
         best_magnitude = (
             self.hyperparameter_log_df
-            .reset_index()
-            .query('heritability_weight != 0')
-            .set_index(['l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter'])
-            .loc[(0, 0, 0, 0.01, 5000)]
-            .loc[lambda df: df['qt_metric'] == df['qt_metric'].min(), 'heritability_weight']
-            .item()
+                .reset_index()
+                .query('heritability_weight != 0')
+                .set_index(['l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter'])
+                .loc[lambda df: df['qt_metric'] == df['qt_metric'].min(), 'heritability_weight']
+                .max()
         )
         self.fit_binary_search(min_weight=best_magnitude / 10, max_weight=best_magnitude * 10,
                                search_depth=binary_search_depth, l1_weight=l1_weight, l2_weight=l2_weight, seed=seed,
