@@ -9,8 +9,9 @@ import tqdm.auto
 def heritability_fn(weights, feature_genetic_covariance, feature_phenotypic_covariance):
     """Computes the heritability of a derived trait which is a linear combination of traits
     with known heritabilities and co-heritabilities."""
-    return (weights @ feature_genetic_covariance @ weights.T) / \
-        (weights @ feature_phenotypic_covariance @ weights.T)
+    h2 = (weights @ feature_genetic_covariance @ weights.T) / \
+         (weights @ feature_phenotypic_covariance @ weights.T)
+    return h2[0, 0]
 
 def coheritability_fn(weights, target_genetic_covariance, target_phenotypic_covariance):
     """Computes the coheritability of a trait with a linear combination of other traits with
@@ -23,7 +24,7 @@ def mse_loss(output, target):
 
 
 class PhenotypeFit(torch.nn.Module):
-    def __init__(self, input_dim, output_dim=1, mse_weight=1, heritability_weight=0,
+    def __init__(self, input_dim, output_dim=1, bce_weight=1, heritability_weight=0, l1_weight=0, l2_weight=0,
                  feature_genetic_covariance=None, feature_phenotypic_covariance=None,
                  target_genetic_covariance=None, target_phenotypic_covariance=None):
         """
@@ -37,10 +38,14 @@ class PhenotypeFit(torch.nn.Module):
             Number of feature traits
         output_dim : int
             Number of target traits, by default 1
-        mse_weight : float, optional
-            Weight applied to the MSE term of the loss function, by default 1
+        bce_weight : float, optional
+            Weight applied to the BCE term of the loss function, by default 1
         heritability_weight : float, optional
             Weight applied to the heritability term of the loss function, by default 0
+        l1_weight : float, optional
+            Weight applied to the L1 norm of the coefficients, by default 0
+        l2_weight : float, optional
+            Weight applied to the L2 norm of the coefficients, by default 0
         feature_genetic_covariance : torch.tensor, optional
             Matrix of genetic covariances for the feature traits, (n_features x n_features), by default None
         feature_phenotypic_covariance : torch.tensor, optional
@@ -55,7 +60,9 @@ class PhenotypeFit(torch.nn.Module):
 
         # Information stored for use in the loss function
         self.h2_weight = heritability_weight
-        self.mse_weight = mse_weight
+        self.bce_weight = bce_weight
+        self.l1_weight = l1_weight
+        self.l2_weight = l2_weight
         self.feature_g_cov = feature_genetic_covariance
         self.feature_p_cov = feature_phenotypic_covariance
         self.target_g_cov = target_genetic_covariance
@@ -75,7 +82,16 @@ class PhenotypeFit(torch.nn.Module):
         return coheritability_fn(weights, self.target_g_cov, self.target_p_cov)
 
     def loss_fn(self, output, target, weights):
-        return self.mse_weight * torch.nn.BCELoss()(output, target) - self.h2_weight * self.heritability(weights)
+        loss = 0
+        if self.bce_weight != 0:
+            loss += self.bce_weight * torch.nn.BCELoss()(output, target)
+        if self.h2_weight != 0:
+            loss -= self.h2_weight * self.heritability(weights)
+        if self.l1_weight != 0:
+            loss += self.l1_weight * torch.norm(weights, p=1)
+        if self.l2_weight != 0:
+            loss += self.l2_weight * torch.norm(weights, p=2)
+        return loss
 
     def fit(self, X, y, n_iter, learning_rate, seed, verbose=False, log_freq=100):
         """
@@ -143,28 +159,32 @@ class MultiFitter:
         feature_names : List[string]
             List of names for each feature, in the same order as the features appear, optional
         """
+        n_samples, self.n_features = X.shape
+
         self.X = X
-        self.y = y
+        self.y = y.view(n_samples, 1)
         self.h2_target = h2_target
         self.feature_g_cov = feature_genetic_covariance
         self.feature_p_cov = feature_phenotypic_covariance
         self.target_g_cov = target_genetic_covariance
         self.target_p_cov = target_phenotypic_covariance
         self.hyperparameter_log_df = (
-            pd.DataFrame(columns=['heritability_weight', 'seed', 'learning_rate', 'n_iter', 'qt_metric'])
-            .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter'])
+            pd.DataFrame(columns=['heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter',
+                                  'qt_metric'])
+            .set_index(['heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter'])
         )
-        self.train_log_df = pd.DataFrame(columns=['heritability_weight', 'seed', 'learning_rate', 'n_iter', 'step',
-                                                  'loss'])
+        self.train_log_df = pd.DataFrame(columns=['heritability_weight', 'l1_weight', 'l2_weight', 'seed',
+                                                  'learning_rate', 'n_iter', 'step', 'loss'])
         self.feature_names = feature_names if feature_names is not None else list(range(X.shape[1]))
         self.parameters_df = (
-            pd.DataFrame(columns=['heritability_weight', 'seed', 'learning_rate', 'n_iter', *self.feature_names,
-                                  'intercept'])
-            .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter'])
+            pd.DataFrame(columns=['heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter',
+                                  *self.feature_names, 'intercept'])
+            .set_index(['heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter'])
         )
 
     @classmethod
-    def from_tables(cls, phenotype_code, genetic_covariance_matrix, phenotypic_covariance_matrix, phenotypes_df):
+    def from_tables(cls, phenotype_code, genetic_covariance_matrix, phenotypic_covariance_matrix, features_df,
+                    outcomes_df):
         """
         Load a model from a covariance matrices and phenotype data
 
@@ -178,13 +198,17 @@ class MultiFitter:
         phenotypic_covariance_matrix : pandas.DataFrame
             Square pandas.DataFrame whose index and columns contain `phenotype_code` and entries are equal to phenotypic
             covariances
-        phenotypes_df : pandas.DataFrame
-            People x phenotypes table. Column names are the same as those for genetic and phenotypic covariance matrices
+        features_df : pandas.DataFrame
+            People x phenotypes table. Column names are the same as those for genetic and phenotypic covariance
+            matrices. These features are typically standardized phenotype values.
+        outcomes_df : pandas.DataFrame
+            People x phenotypes table. Column names are the same as those for genetic and phenotypic covariance
+            matrices. These outcomes are typically unstandardized phenotype values.
         """
         target_heritability = genetic_covariance_matrix.loc[phenotype_code, phenotype_code]
-        feature_cols = phenotypes_df.columns.drop(phenotype_code)
-        X = phenotypes_df.loc[:, feature_cols]
-        y = phenotypes_df.loc[:, [phenotype_code]]
+        feature_cols = features_df.columns.drop(phenotype_code)
+        X = features_df.loc[:, feature_cols]
+        y = outcomes_df.loc[:, [phenotype_code]]
 
         feature_genetic_covariance = genetic_covariance_matrix.loc[feature_cols, feature_cols]
         feature_phenotypic_covariance = phenotypic_covariance_matrix.loc[feature_cols, feature_cols]
@@ -225,7 +249,8 @@ class MultiFitter:
         term_2 = np.abs(1 - h2)
         return term_1 + term_2
 
-    def fit_single(self, heritability_weight=0, seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
+    def fit_single(self, heritability_weight=0, l1_weight=0, l2_weight=0, seed=0, learning_rate=0.001, n_iter=5000,
+                   verbose=False, log_freq=100):
         """
         Fit a model for a single heritability weight/seed/learning rate/iteration combo
 
@@ -233,6 +258,10 @@ class MultiFitter:
         ----------
         heritability_weight : float, optional
             Weight applied to the heritability term in the model loss function, by default 0
+        l1_weight : float, optional
+            Weight applied to the L1 norm of the coefficients, by default 0
+        l2_weight : float, optional
+            Weight applied to the L2 norm of the coefficients, by default 0
         seed : int, optional
             Random seed used for training, by default 0
         learning_rate : float, optional
@@ -244,14 +273,19 @@ class MultiFitter:
         log_freq : int, optional
             Number of iterations between logging during training, by default 100
         """
-        if (heritability_weight, seed, learning_rate, n_iter) in self.hyperparameter_log_df.index:
+        # Finding errors due to different floating precisions in pandas index vs tensor. Only use 9 digits of precision
+        heritability_weight = round(heritability_weight, 15)
+        l1_weight = round(l1_weight, 15)
+        l2_weight = round(l2_weight, 15)
+
+        if (heritability_weight, l1_weight, l2_weight, seed, learning_rate, n_iter) in self.hyperparameter_log_df.index:
             return
         # Instantiate the model class
         model = PhenotypeFit(
-            input_dim=self.X.shape[1], output_dim=1, mse_weight=1,
-            heritability_weight=heritability_weight, feature_genetic_covariance=self.feature_g_cov,
-            feature_phenotypic_covariance=self.feature_p_cov, target_genetic_covariance=self.target_g_cov,
-            target_phenotypic_covariance=self.target_p_cov
+            input_dim=self.X.shape[1], output_dim=1, bce_weight=1,
+            heritability_weight=heritability_weight, l1_weight=l1_weight, l2_weight=l2_weight,
+            feature_genetic_covariance=self.feature_g_cov, feature_phenotypic_covariance=self.feature_p_cov,
+            target_genetic_covariance=self.target_g_cov, target_phenotypic_covariance=self.target_p_cov
         )
 
         # Train the model
@@ -261,8 +295,10 @@ class MultiFitter:
         # Gather the model's training log
         model_train_df = (
             model.train_log_df
-            .assign(heritability_weight=heritability_weight, seed=seed, learning_rate=learning_rate, n_iter=n_iter)
-            .loc[:, ['heritability_weight', 'seed', 'learning_rate', 'n_iter', 'step', 'loss']]
+            .assign(heritability_weight=heritability_weight, l1_weight=l1_weight, l2_weight=l2_weight, seed=seed,
+                    learning_rate=learning_rate, n_iter=n_iter)
+            .loc[:, ['heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter', 'step',
+                     'loss']]
         )
         self.train_log_df = pd.concat([self.train_log_df, model_train_df], ignore_index=True)
 
@@ -270,10 +306,10 @@ class MultiFitter:
         model_qt_metric = self.qt_metric(model.linear.weight)
         model_qt_metric_row = (
             pd.DataFrame({
-                'heritability_weight': [heritability_weight], 'seed': [seed], 'learning_rate': [learning_rate],
-                'n_iter': [n_iter], 'qt_metric': [model_qt_metric]
+                'heritability_weight': [heritability_weight], 'l1_weight': [l1_weight], 'l2_weight': [l2_weight],
+                'seed': [seed], 'learning_rate': [learning_rate], 'n_iter': [n_iter], 'qt_metric': [model_qt_metric]
             })
-            .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter'])
+            .set_index(['heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter'])
         )
         self.hyperparameter_log_df = pd.concat([self.hyperparameter_log_df, model_qt_metric_row], ignore_index=False)
 
@@ -281,11 +317,12 @@ class MultiFitter:
         weights, intercept = tuple(model.linear.parameters())
         weights = weights.detach().flatten().tolist()
         intercept = intercept.item()
-        row = [heritability_weight, seed, learning_rate, n_iter, *weights, intercept]
-        colnames = ['heritability_weight', 'seed', 'learning_rate', 'n_iter', *self.feature_names, 'intercept']
+        row = [heritability_weight, l1_weight, l2_weight, seed, learning_rate, n_iter, *weights, intercept]
+        colnames = ['heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter',
+                    *self.feature_names, 'intercept']
         model_parameters_df = (
             pd.DataFrame([row], columns=colnames)
-            .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter'])
+            .set_index(['heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter'])
         )
         self.parameters_df = pd.concat([self.parameters_df, model_parameters_df], ignore_index=False)
 
@@ -297,16 +334,21 @@ class MultiFitter:
             .loc[lambda df: df['qt_metric'] == df['qt_metric'].min()]
             .to_dict('records')[0]
         )
-        return (best_setting['heritability_weight'], best_setting['seed'], best_setting['learning_rate'],
-                best_setting['n_iter'])
+        return (best_setting['heritability_weight'], best_setting['l1_weight'], best_setting['l2_weight'],
+                best_setting['seed'], best_setting['learning_rate'], best_setting['n_iter'])
 
-    def get_predictions(self, heritability_weight, seed, learning_rate, n_iter):
+    def get_predictions(self, heritability_weight, l1_weight, l2_weight, seed, learning_rate, n_iter):
         """Generate predicted values for all samples for a given train setting"""
-        parameters = self.parameters_df.loc[(heritability_weight, seed, learning_rate, n_iter)].values
-        weights = torch.from_numpy(parameters[:-1]).float()
-        intercept = torch.tensor((parameters[-1])).float()
+        parameters = (
+            self.parameters_df
+            .loc[(heritability_weight, l1_weight, l2_weight, seed, learning_rate, n_iter)]
+            .values
+        )
+        weights = torch.nn.Parameter(torch.from_numpy(parameters[:-1]).view(1, self.n_features).float())
+        intercept = torch.nn.Parameter(torch.tensor((parameters[-1])).float())
         model = torch.nn.Linear(in_features=self.X.shape[1], out_features=1, bias=True)
-        model.weights, model.intercept = (weights, intercept)
+        model.weight = weights
+        model.bias = intercept
         return torch.sigmoid(model(self.X))
 
     def save_fit(self, path, person_ids=None, save_raw_data=True, overwrite=False):
@@ -349,8 +391,8 @@ class MultiFitter:
                 .loc[lambda df: df['qt_metric'] == df['qt_metric'].min()]
                 .to_dict('records')[0]
             )
-            best_wo_h2 = (best_wo_h2['heritability_weight'], best_wo_h2['seed'], best_wo_h2['learning_rate'],
-                          best_wo_h2['n_iter'])
+            best_wo_h2 = (best_wo_h2['heritability_weight'], best_wo_h2['l1_weight'], best_wo_h2['l2_weight'],
+                          best_wo_h2['seed'], best_wo_h2['learning_rate'], best_wo_h2['n_iter'])
             no_h2_predictions = self.get_predictions(*best_wo_h2).detach().numpy().flatten()
             predictions = self.get_predictions(*best_settings).detach().numpy().flatten()
             plink_df = pd.DataFrame({'FID': person_ids, 'IID': person_ids, 'target': target,
@@ -384,17 +426,17 @@ class MultiFitter:
         target_p_cov = torch.load(path.joinpath('raw/target_phenotypic_covariance.pt'))
         with open(path.joinpath('raw/h2.txt'), 'r') as f:
             h2_target = float(f.readline().strip())
-        cl = cls(X=X, y=y, h2_target=h2_target,  feature_genetic_covariance=feature_g_cov,
+        cl = cls(X=X, y=y, h2_target=h2_target, feature_genetic_covariance=feature_g_cov,
                  feature_phenotypic_covariance=feature_p_cov, target_genetic_covariance=target_g_cov,
                  target_phenotypic_covariance=target_p_cov)
 
         cl.hyperparameter_log_df = (
             pd.read_csv(path.joinpath('hyperparameter_log.tsv'), sep='\t')
-            .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter'])
+            .set_index(['heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter'])
         )
         cl.parameters_df = (
             pd.read_csv(path.joinpath('parameter_values.tsv.gz'), sep='\t')
-            .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter'])
+            .set_index(['heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter'])
         )
         cl.train_log_df = pd.read_csv(path.joinpath('training_log.tsv.gz'), sep='\t')
         cl.feature_names = pd.read_csv(path.joinpath('feature_names.tsv'), header=None).values.flatten().tolist()
@@ -447,7 +489,7 @@ class GradientDescentFitter(MultiFitter):
             old_x = x
             old_y = y
             x = old_x - gd_lr * grad
-            x = round(x, ndigits=5)
+            x = round(x, ndigits=15)
             if x == old_x:
                 break
             self.fit_single(heritability_weight=x, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
@@ -488,43 +530,64 @@ class GradientDescentFitter(MultiFitter):
 
 
 class CombinationFitter(MultiFitter):
-    def fit_single_multiplier(self, multiplier=0.5, seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
+    def fit_single_multiplier(self, multiplier=0.5, l1_weight=0, l2_weight=0, seed=0, learning_rate=0.001, n_iter=5000,
+                              verbose=False, log_freq=100):
         """Fit a model using a heritability weight, chosen as the relative size of the heritability loss compared to the
         overall training loss. Weight = multiplier * overall loss / proxy trait heritability"""
-        self.fit_single(heritability_weight=0, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
-                        verbose=verbose, log_freq=log_freq)
-        qt_metric = self.hyperparameter_log_df.loc[(0, seed, learning_rate, n_iter), 'qt_metric'].item()
+        self.fit_single(heritability_weight=0, l1_weight=l1_weight, l2_weight=l2_weight, seed=seed,
+                        learning_rate=learning_rate, n_iter=n_iter, verbose=verbose, log_freq=log_freq)
+        qt_metric = (
+            self.hyperparameter_log_df
+            .loc[(0, l1_weight, l2_weight, seed, learning_rate, n_iter), 'qt_metric']
+            .item()
+        )
         loss = (
             self.train_log_df
-            .set_index(['heritability_weight', 'seed', 'learning_rate', 'n_iter', 'step'])
-            .loc[(0, seed, learning_rate, n_iter, (n_iter - 1) - (n_iter - 1) % log_freq)]
+            .set_index(['heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter', 'step'])
+            .loc[(0, l1_weight, l2_weight, seed, learning_rate, n_iter, (n_iter - 1) - (n_iter - 1) % log_freq)]
             ['loss']
             .item()
         )
         multiplier_term = max(1 - multiplier, 1e-6)
         heritability_weight = multiplier * loss / (qt_metric * multiplier_term)
         assert isinstance(heritability_weight, float)
-        self.fit_single(heritability_weight=heritability_weight, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
-                        verbose=verbose, log_freq=log_freq)
+        self.fit_single(heritability_weight=heritability_weight, l1_weight=l1_weight, l2_weight=l2_weight, seed=seed,
+                        learning_rate=learning_rate, n_iter=n_iter, verbose=verbose, log_freq=log_freq)
 
-    def fit_binary_search(self, min_weight=0, max_weight=5, search_depth=10, seed=0, learning_rate=0.001, n_iter=5000,
-                          verbose=False, log_freq=100):
+    def fit_binary_search(self, min_weight=0, max_weight=5, search_depth=10, l1_weight=0, l2_weight=0, seed=0,
+                          learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
         """Use binary search across heritability weights to find an approximate best solution"""
         for _ in tqdm.auto.trange(search_depth):
             x1 = min_weight + (max_weight - min_weight) / 3
             x2 = min_weight + 2 * (max_weight - min_weight) / 3
-            self.fit_single(heritability_weight=x1, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
-                            verbose=verbose, log_freq=log_freq)
-            self.fit_single(heritability_weight=x2, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
-                            verbose=verbose, log_freq=log_freq)
-            y1 = self.hyperparameter_log_df.loc[(x1, seed, learning_rate, n_iter), 'qt_metric'].item()
-            y2 = self.hyperparameter_log_df.loc[(x2, seed, learning_rate, n_iter), 'qt_metric'].item()
+
+            # Fix floating point errors
+            x1 = round(x1, 15)
+            x2 = round(x2, 15)
+            l1_weight = round(l1_weight, 15)
+            l2_weight = round(l2_weight, 15)
+
+            self.fit_single(heritability_weight=x1, l1_weight=l1_weight, l2_weight=l2_weight, seed=seed,
+                            learning_rate=learning_rate, n_iter=n_iter, verbose=verbose, log_freq=log_freq)
+            self.fit_single(heritability_weight=x2, l1_weight=l1_weight, l2_weight=l2_weight, seed=seed,
+                            learning_rate=learning_rate, n_iter=n_iter, verbose=verbose, log_freq=log_freq)
+            y1 = (
+                self.hyperparameter_log_df
+                .loc[(x1, l1_weight, l2_weight, seed, learning_rate, n_iter), 'qt_metric']
+                .item()
+            )
+            y2 = (
+                self.hyperparameter_log_df
+                .loc[(x2, l1_weight, l2_weight, seed, learning_rate, n_iter), 'qt_metric']
+                .item()
+            )
             if y1 < y2:
                 max_weight = min_weight + (max_weight - min_weight) / 2
             else:
                 min_weight = min_weight + (max_weight - min_weight) / 2
 
-    def fit(self, n_orders_of_magnitude=6, binary_search_depth=10, seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
+    def fit(self, binary_search_depth=10, l1_weight=0, l2_weight=0, seed=0, learning_rate=0.001, n_iter=5000,
+            verbose=False, log_freq=100):
         """
         Fit the heritability-weighted QTPhenProxy model's hyperparameter using a two-stage method. First, fit models
         using weights of varying orders-of-magnitude to determine the best order of magnitude for the weight relative
@@ -535,6 +598,10 @@ class CombinationFitter(MultiFitter):
         ----------
         binary_search_depth : int, optional
             Number of binary search iterations for exploring the appropriate order of magnitude, by default 10
+        l1_weight : float, optional
+            Weight applied to the L1 norm of the coefficients, by default 0
+        l2_weight : float, optional
+            Weight applied to the L2 norm of the coefficients, by default 0
         seed : int, optional
             Random seed for QTPhenProxy model fitting, by default 0
         learning_rate : float, optional
@@ -546,18 +613,20 @@ class CombinationFitter(MultiFitter):
         log_freq : int, optional
             Number of iterations at which to log QTPhenProxy model training statistics, by default 100
         """
-        orders_of_magnitude = 10.0 ** - np.arange(n_orders_of_magnitude)
+        orders_of_magnitude = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
         for multiplier in orders_of_magnitude:
-            self.fit_single_multiplier(multiplier=multiplier, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
-                                       verbose=verbose, log_freq=log_freq)
+            self.fit_single_multiplier(multiplier=multiplier, l1_weight=l1_weight, l2_weight=l2_weight, seed=seed,
+                                       learning_rate=learning_rate, n_iter=n_iter, verbose=verbose, log_freq=log_freq)
 
         best_magnitude = (
             self.hyperparameter_log_df
             .reset_index()
             .query('heritability_weight != 0')
+            .set_index(['l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter'])
+            .loc[(0, 0, 0, 0.01, 5000)]
             .loc[lambda df: df['qt_metric'] == df['qt_metric'].min(), 'heritability_weight']
-            .max()
+            .item()
         )
         self.fit_binary_search(min_weight=best_magnitude / 10, max_weight=best_magnitude * 10,
-                               search_depth=binary_search_depth, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
-                               verbose=verbose, log_freq=log_freq)
+                               search_depth=binary_search_depth, l1_weight=l1_weight, l2_weight=l2_weight, seed=seed,
+                               learning_rate=learning_rate, n_iter=n_iter, verbose=verbose, log_freq=log_freq)
