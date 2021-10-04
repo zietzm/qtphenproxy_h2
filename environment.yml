@@ -12,6 +12,7 @@ dependencies:
   - plotnine=0.8.0
   - pytorch::pytorch=1.9.0
   - python
+  - pytest
   - requests=2.26.0
   - r-cowplot=1.1.1
   - r-irkernel=1.2
