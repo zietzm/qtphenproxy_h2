@@ -451,7 +451,7 @@ class MultiFitter:
         target_g_cov = torch.load(path.joinpath('raw/target_genetic_covariance.pt'))
         target_p_cov = torch.load(path.joinpath('raw/target_phenotypic_covariance.pt'))
 
-        with open(path.joinpath('raw/h2.txt'), 'r') as f:
+        with open(path.joinpath('raw/meta.json'), 'r') as f:
             meta_dict = json.load(f)
         cl = cls(X=X, y=y, family=meta_dict['family'], h2_target=meta_dict['heritability'],
                  feature_genetic_covariance=feature_g_cov, feature_phenotypic_covariance=feature_p_cov,
