@@ -272,8 +272,8 @@ class MultiFitter:
         term_2 = np.abs(1 - h2)
         return term_1 + term_2
 
-    def fit_single(self, error_weight=1, heritability_weight=0, l1_weight=0, l2_weight=0, seed=0, learning_rate=0.001, n_iter=5000,
-                   verbose=False, log_freq=100):
+    def fit_single(self, error_weight=1, heritability_weight=0, l1_weight=0, l2_weight=0, seed=0, learning_rate=0.001,
+                   n_iter=5000, verbose=False, log_freq=100):
         """
         Fit a model for a single heritability weight/seed/learning rate/iteration combo
 
@@ -365,15 +365,25 @@ class MultiFitter:
         return (best_setting['error_weight'], best_setting['heritability_weight'], best_setting['l1_weight'],
                 best_setting['l2_weight'], best_setting['seed'], best_setting['learning_rate'], best_setting['n_iter'])
 
-    def get_predictions(self, error_weight, heritability_weight, l1_weight, l2_weight, seed, learning_rate, n_iter):
-        """Generate predicted values for all samples for a given train setting"""
+    def build_model(self, error_weight, heritability_weight, l1_weight, l2_weight, seed, learning_rate, n_iter):
         parameters = (
             self.parameters_df
             .loc[(error_weight, heritability_weight, l1_weight, l2_weight, seed, learning_rate, n_iter)]
         )
         model = PhenotypeFit(input_dim=self.X.shape[1], output_dim=1, family=self.family)
-        model.linear.weight = torch.nn.Parameter(torch.from_numpy(parameters[self.feature_names].values).view(1, self.n_features).float())
+        model.linear.weight = torch.nn.Parameter(
+            torch.from_numpy(parameters[self.feature_names].values)
+            .view(1, self.n_features)
+            .float()
+        )
         model.linear.bias = torch.nn.Parameter(torch.tensor((parameters['intercept'])).float())
+        return model
+
+    def get_predictions(self, error_weight, heritability_weight, l1_weight, l2_weight, seed, learning_rate, n_iter):
+        """Generate predicted values for all samples for a given train setting"""
+        model = self.build_model(self, error_weight=error_weight, heritability_weight=heritability_weight,
+                                 l1_weight=l1_weight, l2_weight=l2_weight, seed=seed, learning_rate=learning_rate,
+                                 n_iter=n_iter)
         return model(self.X)
 
     def save_fit(self, path, person_ids=None, save_raw_data=True, overwrite=False):
@@ -504,8 +514,16 @@ class GradientDescentFitter(MultiFitter):
                         l1_weight=l1_weight, l2_weight=l2_weight, verbose=verbose, log_freq=log_freq)
         self.fit_single(error_weight=1, heritability_weight=0.1, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
                         l1_weight=l1_weight, l2_weight=l2_weight, verbose=verbose, log_freq=log_freq)
-        old_y = self.hyperparameter_log_df.loc[(1, 0, l1_weight, l2_weight, seed, learning_rate, n_iter), 'qt_metric'].item()
-        y = self.hyperparameter_log_df.loc[(1, 0.1, l1_weight, l2_weight, seed, learning_rate, n_iter), 'qt_metric'].item()
+        old_y = (
+            self.hyperparameter_log_df
+            .loc[(1, 0, l1_weight, l2_weight, seed, learning_rate, n_iter), 'qt_metric']
+            .item()
+        )
+        y = (
+            self.hyperparameter_log_df
+            .loc[(1, 0.1, l1_weight, l2_weight, seed, learning_rate, n_iter), 'qt_metric']
+            .item()
+        )
         grad = (old_y - y) / (0.1)
         x = 0.1
 
@@ -522,7 +540,11 @@ class GradientDescentFitter(MultiFitter):
                 break
             self.fit_single(error_weight=1, heritability_weight=x, seed=seed, learning_rate=learning_rate,
                             n_iter=n_iter, l1_weight=l1_weight, l2_weight=l2_weight, verbose=verbose, log_freq=log_freq)
-            y = self.hyperparameter_log_df.loc[(1, x, l1_weight, l2_weight, seed, learning_rate, n_iter), 'qt_metric'].item()
+            y = (
+                self.hyperparameter_log_df
+                .loc[(1, x, l1_weight, l2_weight, seed, learning_rate, n_iter), 'qt_metric']
+                .item()
+            )
             grad = (old_y - y) / (old_x - x)
 
 
@@ -552,8 +574,8 @@ class CombinationFitter(MultiFitter):
                         l2_weight=l2_weight, seed=seed, learning_rate=learning_rate, n_iter=n_iter, verbose=verbose,
                         log_freq=log_freq)
 
-    def fit_binary_search(self, min_weight=0, max_weight=5, search_depth=10, error_weight=1, l1_weight=0, l2_weight=0, seed=0,
-                          learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
+    def fit_binary_search(self, min_weight=0, max_weight=5, search_depth=10, error_weight=1, l1_weight=0, l2_weight=0,
+                          seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
         """Use binary search across heritability weights to find an approximate best solution"""
         for _ in tqdm.auto.trange(search_depth):
             x1 = min_weight + (max_weight - min_weight) / 3
