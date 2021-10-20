@@ -381,7 +381,7 @@ class MultiFitter:
 
     def get_predictions(self, error_weight, heritability_weight, l1_weight, l2_weight, seed, learning_rate, n_iter):
         """Generate predicted values for all samples for a given train setting"""
-        model = self.build_model(self, error_weight=error_weight, heritability_weight=heritability_weight,
+        model = self.build_model(error_weight=error_weight, heritability_weight=heritability_weight,
                                  l1_weight=l1_weight, l2_weight=l2_weight, seed=seed, learning_rate=learning_rate,
                                  n_iter=n_iter)
         return model(self.X)
