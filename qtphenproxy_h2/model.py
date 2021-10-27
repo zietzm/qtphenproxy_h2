@@ -354,18 +354,13 @@ class MultiFitter:
         )
         self.parameters_df = pd.concat([self.parameters_df, model_parameters_df], ignore_index=False)
 
-    def get_best_setting(self, heritability_weight_query=None, l1_weight_query=None, l2_weight_query=None):
+    def get_best_setting(self, queries=None):
         """Return the hyperparameter setting that optimized the QT metric"""
         hyperparameter_df = self.hyperparameter_log_df.reset_index(drop=False)
 
-        if heritability_weight_query is not None:
-            hyperparameter_df = hyperparameter_df.loc[heritability_weight_query]
-
-        if l1_weight_query is not None:
-            hyperparameter_df = hyperparameter_df.loc[l1_weight_query]
-
-        if l2_weight_query is not None:
-            hyperparameter_df = hyperparameter_df.loc[l2_weight_query]
+        if queries is not None:
+            for query in queries:
+                hyperparameter_df = hyperparameter_df.loc[query]
 
         hyperparameter_df = hyperparameter_df.loc[lambda df: df['qt_metric'] == df['qt_metric'].min()]
 
@@ -378,6 +373,7 @@ class MultiFitter:
         setting = (
             hyperparameter_df
             [['error_weight', 'heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate', 'n_iter']]
+            .reset_index(drop=True)
             .T
             [0]
             .to_dict()
@@ -436,22 +432,13 @@ class MultiFitter:
         if self.hyperparameter_log_df.shape[0] > 0:
             if person_ids is None:
                 raise ValueError("Person IDs must be given to save predictions to a Plink format file")
-            best_settings = self.get_best_setting()
             target = self.y.detach().numpy().flatten()
-            best_wo_h2 = (
-                self.hyperparameter_log_df
-                .reset_index()
-                .query('heritability_weight == 0')
-                .loc[lambda df: df['qt_metric'] == df['qt_metric'].min()]
-                .to_dict('records')[0]
-            )
-            best_wo_h2 = (best_wo_h2['error_weight'], best_wo_h2['heritability_weight'], best_wo_h2['l1_weight'],
-                          best_wo_h2['l2_weight'], best_wo_h2['seed'], best_wo_h2['learning_rate'],
-                          best_wo_h2['n_iter'])
+            best_wo_h2 = self.get_best_setting([lambda df: df['heritability_weight'] == 0])
+            best_w_h2 = self.get_best_setting([lambda df: df['heritability_weight'] != 0])
             no_h2_predictions = self.get_predictions(**best_wo_h2).detach().numpy().flatten()
-            predictions = self.get_predictions(**best_settings).detach().numpy().flatten()
+            h2_predictions = self.get_predictions(**best_w_h2).detach().numpy().flatten()
             plink_df = pd.DataFrame({'FID': person_ids, 'IID': person_ids, 'target': target,
-                                     'qtphenproxy': no_h2_predictions, 'qtphenproxy_h2': predictions})
+                                     'qtphenproxy': no_h2_predictions, 'qtphenproxy_h2': h2_predictions})
             plink_df.to_csv(path.joinpath('predictions.pheno'), sep='\t', index=False, header=True)
 
         if save_raw_data:
