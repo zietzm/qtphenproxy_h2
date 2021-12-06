@@ -401,7 +401,7 @@ class MultiFitter:
                                  n_iter=n_iter)
         return model(self.X)
 
-    def save_fit(self, path, person_ids=None, save_raw_data=True, overwrite=False):
+    def save_fit(self, path, person_ids=None, save_raw_data=True, overwrite=False, write_plink=True):
         """Save a model into a new directory"""
         path = pathlib.Path(path)
         path.mkdir(exist_ok=overwrite)
@@ -429,7 +429,7 @@ class MultiFitter:
             f.writelines(names_lines)
 
         # Save the best model to a plink file
-        if self.hyperparameter_log_df.shape[0] > 0:
+        if self.hyperparameter_log_df.shape[0] > 0 and write_plink:
             if person_ids is None:
                 raise ValueError("Person IDs must be given to save predictions to a Plink format file")
             target = self.y.detach().numpy().flatten()
@@ -460,12 +460,13 @@ class MultiFitter:
     def load_fit(cls, path):
         """Load an already fit model from the specified path"""
         path = pathlib.Path(path)
-        X = torch.load(path.joinpath('raw/X.pt'))
-        y = torch.load(path.joinpath('raw/y.pt'))
-        feature_g_cov = torch.load(path.joinpath('raw/feature_genetic_covariance.pt'))
-        feature_p_cov = torch.load(path.joinpath('raw/feature_phenotypic_covariance.pt'))
-        target_g_cov = torch.load(path.joinpath('raw/target_genetic_covariance.pt'))
-        target_p_cov = torch.load(path.joinpath('raw/target_phenotypic_covariance.pt'))
+        if path.joinpath('raw').exists():
+            X = torch.load(path.joinpath('raw/X.pt'))
+            y = torch.load(path.joinpath('raw/y.pt'))
+            feature_g_cov = torch.load(path.joinpath('raw/feature_genetic_covariance.pt'))
+            feature_p_cov = torch.load(path.joinpath('raw/feature_phenotypic_covariance.pt'))
+            target_g_cov = torch.load(path.joinpath('raw/target_genetic_covariance.pt'))
+            target_p_cov = torch.load(path.joinpath('raw/target_phenotypic_covariance.pt'))
 
         with open(path.joinpath('raw/meta.json'), 'r') as f:
             meta_dict = json.load(f)
