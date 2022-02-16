@@ -332,7 +332,7 @@ class MultiFitter:
 
         # Compute the model's QT metric
         model_qt_metric = self.qt_metric(model.linear.weight)
-        model_heritability = model.heritability(model.linear.weight)
+        model_heritability = model.heritability(model.linear.weight).detach().numpy()
         model_qt_metric_row = (
             pd.DataFrame({
                 'error_weight': [error_weight], 'heritability_weight': [heritability_weight], 'l1_weight': [l1_weight],
