@@ -1,4 +1,5 @@
 import json
+from os import nice
 import pathlib
 
 import numpy as np
@@ -188,7 +189,7 @@ class MultiFitter:
         self.target_p_cov = target_phenotypic_covariance
         self.hyperparameter_log_df = (
             pd.DataFrame(columns=['error_weight', 'heritability_weight', 'l1_weight', 'l2_weight', 'seed',
-                                  'learning_rate', 'n_iter', 'qt_metric'])
+                                  'learning_rate', 'n_iter', 'qt_metric', 'heritability'])
             .set_index(['error_weight', 'heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate',
                         'n_iter'])
         )
@@ -331,11 +332,12 @@ class MultiFitter:
 
         # Compute the model's QT metric
         model_qt_metric = self.qt_metric(model.linear.weight)
+        model_heritability = model.heritability(model.linear.weight)
         model_qt_metric_row = (
             pd.DataFrame({
                 'error_weight': [error_weight], 'heritability_weight': [heritability_weight], 'l1_weight': [l1_weight],
                 'l2_weight': [l2_weight], 'seed': [seed], 'learning_rate': [learning_rate], 'n_iter': [n_iter],
-                'qt_metric': [model_qt_metric]
+                'qt_metric': [model_qt_metric], 'heritability': [model_heritability]
             })
             .set_index(self.hyperparameter_log_df.index.names)
         )
@@ -556,31 +558,6 @@ class GradientDescentFitter(MultiFitter):
 
 
 class CombinationFitter(MultiFitter):
-    def fit_single_multiplier(self, multiplier, error_weight=1, l1_weight=0, l2_weight=0, seed=0,
-                              learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
-        """Fit a model using a heritability weight, chosen as the relative size of the heritability loss compared to the
-        overall training loss. Weight = multiplier * overall loss / proxy trait heritability"""
-        self.fit_single(error_weight=error_weight, heritability_weight=0, l1_weight=l1_weight, l2_weight=l2_weight,
-                        seed=seed, learning_rate=learning_rate, n_iter=n_iter, verbose=verbose, log_freq=log_freq)
-        qt_metric = (
-            self.hyperparameter_log_df
-            .loc[(error_weight, 0, l1_weight, l2_weight, seed, learning_rate, n_iter), 'qt_metric']
-            .item()
-        )
-        loss = (
-            self.train_log_df
-            .set_index(['error_weight', 'heritability_weight', 'l1_weight', 'l2_weight', 'seed', 'learning_rate',
-                        'n_iter', 'step'])
-            .loc[(error_weight, 0, l1_weight, l2_weight, seed, learning_rate, n_iter,
-                  (n_iter - 1) - (n_iter - 1) % log_freq), 'loss']
-        )
-        multiplier_term = max(1 - multiplier, 1e-6)
-        heritability_weight = multiplier * loss / (qt_metric * multiplier_term)
-        assert isinstance(heritability_weight, float)
-        self.fit_single(error_weight=error_weight, heritability_weight=heritability_weight, l1_weight=l1_weight,
-                        l2_weight=l2_weight, seed=seed, learning_rate=learning_rate, n_iter=n_iter, verbose=verbose,
-                        log_freq=log_freq)
-
     def fit_binary_search(self, min_weight=0, max_weight=5, search_depth=10, error_weight=1, l1_weight=0, l2_weight=0,
                           seed=0, learning_rate=0.001, n_iter=5000, verbose=False, log_freq=100):
         """Use binary search across heritability weights to find an approximate best solution"""
@@ -644,11 +621,11 @@ class CombinationFitter(MultiFitter):
         log_freq : int, optional
             Number of iterations at which to log QTPhenProxy model training statistics, by default 100
         """
-        orders_of_magnitude = 10. ** np.arange(start=-n_orders_of_magnitude, stop=0)
-        for multiplier in orders_of_magnitude:
-            self.fit_single_multiplier(multiplier=multiplier, error_weight=error_weight, l1_weight=l1_weight,
-                                       l2_weight=l2_weight, seed=seed, learning_rate=learning_rate, n_iter=n_iter,
-                                       verbose=verbose, log_freq=log_freq)
+        orders_of_magnitude = 10. ** -np.arange(start=5, stop=5+n_orders_of_magnitude)
+        for weight in orders_of_magnitude:
+            self.fit_single(error_weight=error_weight, heritability_weight=weight, l1_weight=l1_weight,
+                            l2_weight=l2_weight, seed=seed, learning_rate=learning_rate, n_iter=n_iter, verbose=verbose,
+                            log_freq=log_freq)
 
         best_magnitude = (
             self.hyperparameter_log_df
